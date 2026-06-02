@@ -458,6 +458,10 @@ h3 {
   overflow: hidden;
 }
 
+.project-panel:not(.active) .project-actions {
+  display: none;
+}
+
 .project-panel.active {
   background: var(--card-strong);
 }
@@ -485,6 +489,50 @@ h3 {
   font-weight: 800;
   text-decoration: none;
   border-bottom: 1px solid rgba(255, 255, 255, 0.35);
+}
+
+.project-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.project-actions a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  margin-top: 0;
+  padding: 0 16px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-bottom: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 800;
+  transition: transform 180ms ease, background 180ms ease, border-color 180ms ease;
+}
+
+.project-actions a.primary {
+  background: linear-gradient(135deg, #ffffff, #d9e9ff);
+  color: #07070d;
+  border-color: transparent;
+}
+
+.project-actions a.secondary {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.project-actions a:hover {
+  transform: translateY(-2px);
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.project-actions a.primary:hover {
+  background: linear-gradient(135deg, #ffffff, #eef5ff);
 }
 
 .lab-layout {
