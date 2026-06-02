@@ -58,7 +58,6 @@ revealElements.forEach(element => observer.observe(element));
 const panels = document.querySelectorAll(".project-panel");
 
 panels.forEach(panel => {
-  panel.addEventListener("mouseenter", () => setActivePanel(panel));
   panel.addEventListener("focus", () => setActivePanel(panel));
   panel.addEventListener("click", () => setActivePanel(panel));
 });
@@ -66,6 +65,14 @@ panels.forEach(panel => {
 function setActivePanel(activePanel) {
   panels.forEach(panel => panel.classList.remove("active"));
   activePanel.classList.add("active");
+  activePanel.classList.remove("is-entering");
+  void activePanel.offsetWidth;
+  activePanel.classList.add("is-entering");
+
+  window.clearTimeout(activePanel._enterTimer);
+  activePanel._enterTimer = window.setTimeout(() => {
+    activePanel.classList.remove("is-entering");
+  }, 420);
 }
 
 const navToggle = document.querySelector(".nav-toggle");
