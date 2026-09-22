@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111111">
+<title>Daily Cleaning Checklist</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icon.svg" type="image/svg+xml">
+<style>
+:root{--bg:#f1f0ec;--card:#fff;--ink:#111;--line:#ddd9d0;--done:#e5f3e8;--muted:#6d6a64}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:Arial,sans-serif;padding:18px 12px 30px}
+button,select,input{font:inherit}.app{max-width:900px;margin:auto}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.brand{font-size:20px;font-weight:900}.install{display:none;border:1px solid #111;background:white;border-radius:999px;padding:10px 15px;font-weight:800}.install.show{display:block}
+.card{background:var(--card);border-radius:20px;box-shadow:0 8px 28px #00000014;overflow:hidden}
+.hero{text-align:center;padding:26px 18px 20px;border-bottom:1px solid var(--line)}.small{font-size:12px;letter-spacing:.12em;text-transform:uppercase;font-weight:900;color:var(--muted)}h1{margin:7px 0 8px;font-size:34px}.date{font-weight:800}.area{display:inline-block;margin-top:14px;padding:10px 14px;background:#111;color:white;border-radius:999px;font-weight:800}
+.nav{display:grid;grid-template-columns:1fr auto 1fr;gap:9px;padding:12px;background:#f7f6f3;border-bottom:1px solid var(--line)}button{min-height:48px;cursor:pointer}.nav button,.secondary,.danger{border-radius:12px;padding:8px 12px;font-weight:800}.nav button,.secondary{background:#fff;border:1px solid var(--line)}.nav .today{background:#111;color:#fff;border-color:#111}.danger{background:#fff;color:#a42c2c;border:1px solid #e2b8b8}
+.progressWrap{padding:18px 18px 8px}.progressHead{display:flex;justify-content:space-between;font-weight:800;margin-bottom:8px}.progressHead span:last-child{color:var(--muted)}.bar{height:10px;background:#e7e4de;border-radius:99px;overflow:hidden}.bar div{height:100%;width:0;background:#111;transition:.2s}
+.tasks{padding:4px 14px 16px}.task{display:grid;grid-template-columns:1fr minmax(170px,230px);gap:14px;align-items:center;border:1px solid var(--line);border-radius:14px;margin-top:10px;padding:15px}.task.done{background:var(--done);border-color:#a8ccb0}.taskText{font-weight:700;line-height:1.35}.task select{width:100%;min-height:50px;border:1px solid #bdb8af;border-radius:12px;padding:8px 12px;background:#fff;font-weight:800}.actions{display:flex;justify-content:center;flex-wrap:wrap;gap:9px;padding:0 14px 18px}.status{text-align:center;color:var(--muted);font-size:13px;min-height:18px;margin-top:10px}
+dialog{width:min(700px,calc(100% - 24px));max-height:82vh;border:0;border-radius:18px;padding:0;box-shadow:0 20px 60px #0005}dialog::backdrop{background:#0008}.dh{position:sticky;top:0;background:white;display:flex;justify-content:space-between;align-items:center;padding:16px;border-bottom:1px solid var(--line)}.dh h2{margin:0}.close{width:44px;border-radius:50%;background:white;border:1px solid var(--line);font-weight:900}.db{padding:16px}.tools{display:grid;grid-template-columns:1fr auto;gap:8px}.tools input{min-height:48px;border:1px solid var(--line);border-radius:12px;padding:9px}.hist{margin-top:10px;border:1px solid var(--line);border-radius:12px;overflow:hidden}.hist button{width:100%;text-align:left;border:0;background:#fff;padding:13px}.histTop{display:flex;justify-content:space-between;font-weight:900}.histSub{display:block;color:var(--muted);font-size:13px;margin-top:3px}.empty{text-align:center;color:var(--muted);padding:25px}
+@media(max-width:650px){.task{grid-template-columns:1fr}.nav button{font-size:14px;padding:6px}.tools{grid-template-columns:1fr}h1{font-size:30px}}
+@media(display-mode:standalone){.install{display:none!important}}
+</style>
+</head>
+<body>
+<main class="app">
+<div class="top"><div class="brand">Shop Cleaning</div><button id="install" class="install">Install app</button></div>
+<section class="card">
+<header class="hero"><div class="small">Daily cleaning checklist</div><h1 id="relative">Today</h1><div id="date" class="date"></div><div id="area" class="area"></div></header>
+<nav class="nav"><button id="prev">← Yesterday</button><button id="today" class="today">Today</button><button id="next">Tomorrow →</button></nav>
+<div class="progressWrap"><div class="progressHead"><span id="count">0 of 10 completed</span><span id="pct">0%</span></div><div class="bar"><div id="bar"></div></div></div>
+<div id="tasks" class="tasks"></div>
+<div class="actions"><button id="history" class="secondary">History & export</button><button id="clear" class="danger">Clear this day</button></div>
+</section><div id="status" class="status"></div>
+</main>
+<dialog id="modal"><div class="dh"><h2>History & export</h2><button id="close" class="close">×</button></div><div class="db"><div class="tools"><input id="jump" type="date"><button id="export" class="secondary">Export CSV</button></div><div id="historyList"></div></div></dialog>
+<script>
+(()=>{"use strict";
+const STAFF=["Aisha","Abdullah","Jennifer","Liyu","Noor","Majd","Nawal","Sara M","Sara N","Duaa"];
+const AREAS=["Till, Consultation & Back store","Skincare & Gifts","Haircare & Mouth","Shower & Soap","Bath & Fresh Table","Feature Tables & Window Area"];
+const TASKS=["Sweep floors and edges thoroughly","Clean & mop floors thoroughly","Clean mirrors & glass surfaces","Dust shelves, displays, merchandise & low-level lighting","Clean & wipe sinks","Clean / wipe countertops, chopping boards & knives","Remove any litter or debris from under cupboards","Flush sinks: fill with cold water and let them drain. Do this 2–3 times to help with product build-up / bad smells.","Empty all bins throughout the store","Ensure entrance mats are clean and free from debris"];
+const ANCHOR="2026-09-22",KEY="lush-cleaning-checklist-v1";let day=midnight(new Date()),promptEvent=null;const $=id=>document.getElementById(id);
+function midnight(d){return new Date(d.getFullYear(),d.getMonth(),d.getDate())} function key(d){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`}
+function parse(k){let[y,m,d]=k.split("-").map(Number);return new Date(y,m-1,d)} function diff(a,b){let x=parse(a),y=parse(b);return Math.round((Date.UTC(x.getFullYear(),x.getMonth(),x.getDate())-Date.UTC(y.getFullYear(),y.getMonth(),y.getDate()))/864e5)}
+function plus(d,n){let x=new Date(d);x.setDate(x.getDate()+n);return midnight(x)} function area(d){let n=diff(key(d),ANCHOR),i=((n%6)+6)%6;return AREAS[i]}
+function full(d){return new Intl.DateTimeFormat("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"}).format(d)} function rel(d){let n=diff(key(d),key(new Date()));if(n===0)return"Today";if(n===-1)return"Yesterday";if(n===1)return"Tomorrow";return new Intl.DateTimeFormat("en-GB",{weekday:"short",day:"numeric",month:"short"}).format(d)}
+function load(){try{return JSON.parse(localStorage.getItem(KEY)||"{}")}catch{return{}}} function save(s){try{localStorage.setItem(KEY,JSON.stringify(s));note("Saved on this tablet.")}catch{note("Could not save. Check browser storage settings.")}}
+function vals(k){let a=load()[k]?.completedBy;return Array.isArray(a)?a.slice(0,10):Array(10).fill("")} function note(t){$("status").textContent=t;clearTimeout(note.t);note.t=setTimeout(()=>$("status").textContent="",1800)}
+function progress(v){let n=v.filter(Boolean).length,p=Math.round(n/10*100);$("count").textContent=`${n} of 10 completed`;$("pct").textContent=`${p}%`;$("bar").style.width=p+"%"}
+function select(value,i){let s=document.createElement("select"),o=document.createElement("option");o.value="";o.textContent="Select name";s.append(o);STAFF.forEach(n=>{let x=document.createElement("option");x.value=n;x.textContent=n;s.append(x)});s.value=value||"";s.onchange=()=>{s.closest(".task").classList.toggle("done",!!s.value);let k=key(day),store=load(),r=store[k]||{date:k,area:area(day),completedBy:Array(10).fill("")};r.completedBy[i]=s.value;r.area=area(day);r.updatedAt=new Date().toISOString();store[k]=r;save(store);progress(r.completedBy)};return s}
+function render(){let k=key(day),v=vals(k);$("relative").textContent=rel(day);$("date").textContent=full(day);$("area").textContent="Area of the Day: "+area(day);$("tasks").innerHTML="";TASKS.forEach((t,i)=>{let r=document.createElement("div");r.className="task"+(v[i]?" done":"");let x=document.createElement("div");x.className="taskText";x.textContent=t;r.append(x,select(v[i],i));$("tasks").append(r)});progress(v);$("jump").value=k;scrollTo({top:0,behavior:"smooth"})}
+function showHistory(){let s=load(),ks=Object.keys(s).filter(k=>/^\d{4}-\d{2}-\d{2}$/.test(k)).sort().reverse(),box=$("historyList");box.innerHTML="";if(!ks.length)box.innerHTML='<div class="empty">No history yet.</div>';ks.slice(0,120).forEach(k=>{let r=s[k],n=(r.completedBy||[]).filter(Boolean).length,w=document.createElement("div"),b=document.createElement("button"),top=document.createElement("div"),sub=document.createElement("span"),left=document.createElement("span"),right=document.createElement("span");w.className="hist";top.className="histTop";sub.className="histSub";left.textContent=full(parse(k));right.textContent=`${n}/10`;sub.textContent=r.area||area(parse(k));top.append(left,right);b.append(top,sub);b.onclick=()=>{day=parse(k);$("modal").close();render()};w.append(b);box.append(w)});$("modal").showModal()}
+function exportCSV(){let s=load(),rows=[["Date","Area","Task","Completed By"]];Object.keys(s).filter(k=>/^\d{4}-\d{2}-\d{2}$/.test(k)).sort().forEach(k=>{let r=s[k],v=r.completedBy||[];TASKS.forEach((t,i)=>rows.push([k,r.area||area(parse(k)),t,v[i]||""]))});let csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\r\n"),u=URL.createObjectURL(new Blob([csv],{type:"text/csv"})),a=document.createElement("a");a.href=u;a.download=`cleaning-${key(new Date())}.csv`;a.click();URL.revokeObjectURL(u)}
+$("prev").onclick=()=>{day=plus(day,-1);render()};$("next").onclick=()=>{day=plus(day,1);render()};$("today").onclick=()=>{day=midnight(new Date());render()};$("clear").onclick=()=>{let k=key(day),v=vals(k);if(!v.some(Boolean))return note("This day is already clear.");if(confirm(`Clear all names for ${full(day)}?`)){let s=load();delete s[k];save(s);render()}};$("history").onclick=showHistory;$("close").onclick=()=>$("modal").close();$("export").onclick=exportCSV;$("jump").onchange=e=>{if(e.target.value){day=parse(e.target.value);$("modal").close();render()}};
+window.addEventListener("beforeinstallprompt",e=>{e.preventDefault();promptEvent=e;$("install").classList.add("show")});$("install").onclick=async()=>{if(promptEvent){promptEvent.prompt();await promptEvent.userChoice;promptEvent=null;$("install").classList.remove("show")}};
+if("serviceWorker"in navigator)addEventListener("load",()=>navigator.serviceWorker.register("./sw.js").catch(()=>{}));render()})();
+</script>
+</body></html>
