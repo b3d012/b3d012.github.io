@@ -7,6 +7,9 @@ https://b3d012.github.io/lush-cleaning/
 
 ## Features
 - Automatic date and 6-area rotation
+- Color-coded Area of the Day
+- Opening / Area of Responsibility / Closing task sections
+- Dynamic OOD date (checklist date minus 7 months)
 - Yesterday / Today / Tomorrow navigation
 - Staff-name completion dropdowns
 - Per-day local history on the tablet
