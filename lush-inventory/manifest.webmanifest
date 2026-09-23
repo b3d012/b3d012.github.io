@@ -1,0 +1,19 @@
+{
+  "name": "Lush Inventory Counter",
+  "short_name": "Inventory",
+  "description": "Offline weekly product inventory counting for the shop tablet",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f2f0eb",
+  "theme_color": "#111111",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
