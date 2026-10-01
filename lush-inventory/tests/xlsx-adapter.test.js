@@ -10,9 +10,32 @@ import {
   normalizeHeader,
   importInventory,
   exportInventory,
+  exportCoordinatorReport,
 } from "../src/xlsx-adapter.js";
 
 globalThis.XLSX = XLSX;
+
+test("coordinator report separates original count, accepted total and declared outcome", () => {
+  const count = { products: [{ id: "p", category: "A", plu: "01", description: "Item", unit: "PCS", onHand: 5, cost: 2, display: "3", cupboard: "0", storeRoom: "0", confirmed: true, provenance: "physical-recount" }], postingDate: "2026-10-01", fileName: "week.xlsx" };
+  const vault = { archives: [{ id: "a", archivedAt: "2026-10-01T10:00:00Z", count, outcomes: { p: { declaredQuantity: 5, reason: "tester-pending", note: "Private note", resolved: false } }, revisions: [] }], expiryRecords: [], departmentChecks: [] };
+  const wb = XLSX.read(exportCoordinatorReport(vault), { type: "array" });
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets["Count outcomes"], { header: 1 });
+  assert.equal(rows[1][rows[0].indexOf("Physical quantity")], 3);
+  assert.equal(rows[1][rows[0].indexOf("Declared quantity")], 5);
+  assert.equal(rows[1][rows[0].indexOf("Discrepancy cost (AED)")], -4);
+  assert.ok(wb.Sheets["OOD batches"]);
+  assert.ok(wb.Sheets["Department checks"]);
+});
+
+test("optional metadata stays unknown and duplicate PLUs are warned", () => {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["Category", "Item No.(PLU)", "Description", "On Hand Qty."], ["A", "1", "Item", 2], ["B", "1", "Other", 3]]), "Items");
+  const count = importInventory(XLSX.write(wb, { type: "array", bookType: "xlsx" }));
+  assert.equal(count.products[0].cost, null);
+  assert.equal(count.products[0].unit, null);
+  assert.equal(count.postingDate, null);
+  assert.ok(count.warnings.some((text) => /duplicate.*1/i.test(text)));
+});
 
 const fixture = new URL("./fixtures/PreChanges.xlsx", import.meta.url);
 
@@ -28,6 +51,14 @@ test("imports the real 21-column export into 119 products", async () => {
   assert.equal(count.products[0].category, "CONDITIONER");
   assert.equal(count.products[0].plu, "60438");
   assert.equal(count.products[0].onHand, 8);
+  assert.equal(count.schemaVersion, 2);
+  assert.equal(count.products[0].department, "HAIRCARE");
+  assert.equal(count.products[0].unit, "PCS");
+  assert.equal(count.products[0].cost, 4.27911);
+  assert.equal(count.postingDate, "2026-09-22");
+  assert.equal(count.products[0].display, "0");
+  assert.equal(count.products[0].confirmed, false);
+  assert.equal(count.sourceSummary.totalCost, 2834.48408);
   assert.equal(count.products[19].plu, "2001063000000");
   assert.equal(count.products[19].onHand, 1.45);
   assert.equal(count.products.find((p) => p.plu === "64971").onHand, -2);
@@ -61,6 +92,7 @@ test("exports exact seven-column order while preserving blank and zero", async (
   count.products[0].display = "0";
   count.products[0].cupboard = "1.5";
   count.products[0].storeRoom = "-1";
+  count.products[0].confirmed = true;
   const bytes = exportInventory(count);
   const wb = XLSX.read(bytes, { type: "array", raw: true });
   assert.deepEqual(wb.SheetNames, ["Store Inventory Journal"]);

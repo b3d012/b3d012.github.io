@@ -19,9 +19,9 @@ test("review list filters incomplete, matching, under, and over", () => {
   assert.deepEqual(filterReviewProducts(products, "under").map((p) => p.id), ["3"]);
 });
 
-test("field update preserves zero and rejects invalid numeric text", () => {
+test("field update preserves zero and retains invalid numeric text for correction", () => {
   const zeroed = updateProductField(products, "1", "display", "0");
   assert.equal(zeroed[0].display, "0");
-  assert.throws(() => updateProductField(products, "1", "display", "2x"), /number/i);
+  assert.equal(updateProductField(products, "1", "display", "2x")[0].display, "2x");
   assert.equal(products[0].display, "");
 });

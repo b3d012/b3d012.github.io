@@ -1,4 +1,4 @@
-import { parseCountValue, productStatus } from "./count-model.js";
+import { parseCountValue, productStatus, recordCountChange } from "./count-model.js";
 
 export function filterProducts(products, category = "ALL", query = "") {
   const needle = String(query).trim().toLowerCase();
@@ -19,7 +19,10 @@ export function filterReviewProducts(products, filter = "all") {
 
 export function updateProductField(products, productId, field, raw) {
   if (!["display", "cupboard", "storeRoom"].includes(field)) throw new Error("Unknown inventory location.");
-  const parsed = parseCountValue(raw);
-  if (parsed.kind === "invalid") throw new Error("Enter a valid number.");
-  return products.map((product) => product.id === productId ? { ...product, [field]: String(raw).trim() } : product);
+  return products.map((product) => {
+    if (product.id !== productId) return product;
+    const changes = { [field]: String(raw).trim(), provenance: "physical-recount" };
+    changes.confirmed = ["display", "cupboard", "storeRoom"].every((key) => parseCountValue(changes[key] ?? product[key]).kind === "valid");
+    return recordCountChange(product, changes, "Edit count");
+  });
 }

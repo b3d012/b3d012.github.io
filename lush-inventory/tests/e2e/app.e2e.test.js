@@ -11,6 +11,11 @@ test("imports the weekly workbook and persists tablet counts", async ({ page }) 
   await page.getByRole("button", { name: "Start counting" }).click();
   await expect(page.getByText("VEGANESE 100G CONDITIONER", { exact: true })).toBeVisible();
   const first = page.locator(".product").first();
+  await expect(first.getByLabel("Display")).toHaveValue("0");
+  await expect(first.getByText("Not started", { exact: true })).toBeVisible();
+  await first.getByRole("button", { name: "MAX", exact: true }).click();
+  await expect(first.getByLabel("Display")).toHaveValue("8");
+  await expect(first.getByText(/Accepted from pre-inventory/)).toBeVisible();
   await first.getByLabel("Display").fill("0");
   await first.getByLabel("Cupboard").fill("3");
   await first.getByLabel("Store Room").fill("5");

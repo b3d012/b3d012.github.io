@@ -1,3 +1,6 @@
+import { productTotals } from "./count-model.js";
+import { offShelfDate } from "./expiry-model.js";
+
 const REQUIRED = [
   { key: "category", label: "Category", aliases: ["category"] },
   { key: "plu", label: "Item No.(PLU)", aliases: ["itemnoplu"] },
@@ -13,7 +16,7 @@ export function normalizeHeader(text) {
 
 function lib() {
   if (!globalThis.XLSX) throw new Error("Spreadsheet engine is unavailable. Reload the app and try again.");
-  return globalThis.XLSX;
+  return globalThis.XLSX.default || globalThis.XLSX;
 }
 
 function toIdentifier(value) {
@@ -50,6 +53,19 @@ export function importInventory(arrayBuffer, fileName = "inventory.xlsx") {
   }
   const products = [];
   const invalidRows = [];
+  const warnings = [];
+  const optional = (row, name) => { const index = normalized.indexOf(normalizeHeader(name)); return index < 0 ? null : row[index]; };
+  const optionalNumber = (value) => value === null || value === undefined || value === "" || !Number.isFinite(Number(value)) ? null : Number(value);
+  const optionalText = (value) => value === null || value === undefined || String(value).trim() === "" ? null : String(value).trim();
+  const readDate = (value) => {
+    if (typeof value === "number") {
+      const date = XLSX.SSF.parse_date_code(value);
+      return date ? `${date.y}-${String(date.m).padStart(2, "0")}-${String(date.d).padStart(2, "0")}` : null;
+    }
+    return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
+  };
+  const dates = new Set();
+  const seen = new Set();
   rows.slice(1).forEach((row, index) => {
     if (!row.some((cell) => cell !== null && String(cell).trim() !== "")) return;
     const rowNumber = index + 2;
@@ -60,25 +76,40 @@ export function importInventory(arrayBuffer, fileName = "inventory.xlsx") {
       invalidRows.push(rowNumber);
       return;
     }
+    if (seen.has(plu)) warnings.push(`Duplicate PLU ${plu}: review the separate rows before historical comparisons.`);
+    seen.add(plu);
+    const postingDate = readDate(optional(row, "Posting Date"));
+    if (postingDate) dates.add(postingDate);
     products.push({
       id: `${plu}::${products.length}`,
       category,
       plu,
       description,
       onHand: toNumber(row[columns.onHand], rowNumber, "On Hand Qty."),
-      display: "",
-      cupboard: "",
-      storeRoom: "",
+      department: optionalText(optional(row, "Department")),
+      unit: optionalText(optional(row, "Unit of Measure Code")),
+      season: optionalText(optional(row, "Season")),
+      cost: optionalNumber(optional(row, "Cost (AED)")),
+      display: "0",
+      cupboard: "0",
+      storeRoom: "0",
+      confirmed: false,
+      provenance: "untouched",
+      events: [],
     });
   });
   if (invalidRows.length) throw new Error(`Rows missing Category, PLU, or Description: ${invalidRows.slice(0, 12).join(", ")}${invalidRows.length > 12 ? "…" : ""}.`);
   if (!products.length) throw new Error("No product rows were found in the worksheet.");
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    id: crypto.randomUUID(),
     fileName,
     sheetName,
     importedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
+    postingDate: dates.size === 1 ? [...dates][0] : null,
+    warnings: dates.size > 1 ? [...warnings, "Multiple posting dates found. Confirm the snapshot date before archiving."] : warnings,
+    sourceSummary: { totalCost: optionalNumber(optional(rows[1] || [], "Total Cost (AED)")), totalOnHand: optionalNumber(optional(rows[1] || [], "Total Hand On Qty.")) },
     products,
   };
 }
@@ -96,9 +127,9 @@ export function exportInventory(count) {
     product.plu,
     product.description,
     Number(product.onHand),
-    exportValue(product.display),
-    exportValue(product.cupboard),
-    exportValue(product.storeRoom),
+    product.confirmed === false ? "" : exportValue(product.display),
+    product.confirmed === false ? "" : exportValue(product.cupboard),
+    product.confirmed === false ? "" : exportValue(product.storeRoom),
   ])];
   const worksheet = XLSX.utils.aoa_to_sheet(rows);
   const border = {
@@ -147,4 +178,35 @@ export function downloadWorkbook(count) {
   anchor.download = exportFileName(count);
   anchor.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export function exportCoordinatorReport(vault) {
+  const XLSX = lib(), workbook = XLSX.utils.book_new();
+  const asDate = (value) => value ? new Date(value.length === 10 ? `${value}T12:00:00Z` : value) : "";
+  const outcomes = [["Snapshot date", "Source file", "Department", "Category", "PLU", "Description", "Unit", "Season", "Unit cost (AED)", "On Hand", "Provenance", "Physical quantity", "Accepted total", "Variance", "Discrepancy cost (AED)", "Declared quantity", "Resolution", "Resolved", "Private note", "Related records"]];
+  const revisions = [["Source file", "PLU", "Date revised", "Previous declared quantity", "New declared quantity", "Reason", "Note"]];
+  for (const archive of vault.archives) {
+    for (const product of archive.count.products) {
+      const totals = productTotals(product), outcome = archive.outcomes[product.id];
+      const physical = ["physical-recount", "legacy-count"].includes(product.provenance);
+      const cost = typeof product.cost === "number" && product.cost >= 0 && product.unit && totals.complete ? totals.variance * product.cost : "";
+      outcomes.push([asDate(archive.count.postingDate), archive.count.fileName, product.department || "Unknown", product.category, product.plu, product.description, product.unit || "Unknown", product.season || "", product.cost ?? "", product.onHand, product.provenance || "Unknown", totals.complete && physical ? totals.countedTotal : "", totals.complete && !physical ? totals.countedTotal : "", totals.variance ?? "", physical ? cost : "", outcome?.declaredQuantity ?? "", outcome?.reason || "", outcome?.resolved ? "Yes" : "No", outcome?.note || "", (outcome?.links || []).map((link) => link.note).join("; ")]);
+    }
+    for (const revision of archive.revisions) revisions.push([archive.count.fileName, archive.count.products.find((p) => p.id === revision.productId)?.plu || "", asDate(revision.at), revision.previous.declaredQuantity ?? "", revision.outcome.declaredQuantity ?? "", revision.outcome.reason, revision.outcome.note]);
+  }
+  const batches = [["Department", "PLU", "Description", "Production date", "Off-shelf date", "Date basis", "Quantity observed", "Unit", "Batch", "Location", "Last observed", "Status", "Closure reason"], ...vault.expiryRecords.map((r) => [r.department, r.plu, r.description || "", asDate(r.productionDate), asDate(offShelfDate(r)), r.expiryOverride ? "Printed date" : `${r.shelfLifeMonths ?? 7} calendar months`, r.quantity, r.unit, r.batch || "", r.location || "", asDate(r.observedAt), r.status, r.closureReason || ""])];
+  const checks = [["Department", "Completed check date", "Next review date"], ...vault.departmentChecks.map((c) => [c.department, asDate(c.date), asDate(c.nextDate)])];
+  for (const [name, rows] of [["Count outcomes", outcomes], ["Outcome revisions", revisions], ["OOD batches", batches], ["Department checks", checks]]) {
+    const sheet = XLSX.utils.aoa_to_sheet(rows);
+    sheet["!cols"] = rows[0].map((header, column) => ({ wch: Math.min(48, Math.max(16, header.length + 2, ...rows.slice(1).map((row) => row[column] instanceof Date ? 16 : String(row[column] ?? "").length))) }));
+    sheet["!rows"] = rows.map((_, index) => ({ hpt: index ? 38 : 28 }));
+    sheet["!autofilter"] = { ref: XLSX.utils.encode_range({ r: 0, c: 0 }, { r: rows.length - 1, c: rows[0].length - 1 }) };
+    for (let r = 0; r < rows.length; r++) for (let c = 0; c < rows[0].length; c++) {
+      const address = XLSX.utils.encode_cell({ r, c });
+      const cell = sheet[address] ||= { t: "s", v: "" };
+      cell.s = { font: { name: "Arial", sz: 11, bold: r === 0, color: { rgb: r === 0 ? "FFFFFF" : "111111" } }, fill: { patternType: "solid", fgColor: { rgb: r === 0 ? "555555" : r % 2 ? "D9EEF6" : "FFFFFF" } }, alignment: { vertical: "center", wrapText: true }, numFmt: rows[r][c] instanceof Date ? "dd mmm yyyy" : cell.t === "n" ? "#,##0.#####" : "@" };
+    }
+    XLSX.utils.book_append_sheet(workbook, sheet, name);
+  }
+  return XLSX.write(workbook, { type: "array", bookType: "xlsx", compression: true });
 }
