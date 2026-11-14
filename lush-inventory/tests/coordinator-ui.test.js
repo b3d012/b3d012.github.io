@@ -94,6 +94,13 @@ test("OOD workbook count saves separately, resumes after lock and opens a read-o
   };
   await unlock();
   assert.equal(root.querySelector("#oodAreas").value, "Haircare and Gifts");
+  const dateField = root.querySelector("#oodCountDate");
+  dateField.value = "2026-10-14"; dateField.dispatchEvent(new window.Event("change"));
+  const cutoff = () => root.querySelector('[data-bucket="pastDue"]').closest("label").textContent;
+  await waitFor(() => cutoff().includes("14 Mar 2026 or earlier"));
+  const shelfField = root.querySelector("#oodShelfLife");
+  shelfField.value = "8"; shelfField.dispatchEvent(new window.Event("change"));
+  await waitFor(() => cutoff().includes("14 Feb 2026 or earlier"));
   const areas = root.querySelector("#oodAreas");
   areas.value = "Skincare and Mouth";
   areas.dispatchEvent(new window.Event("input", { bubbles: true }));
@@ -120,6 +127,7 @@ test("OOD workbook count saves separately, resumes after lock and opens a read-o
   assert.match(root.textContent, /Variance −1|Variance -1/);
   assert.equal(root.querySelectorAll("[data-bucket]").length, 0);
   assert.ok(root.querySelector("#exportOOD"));
+  assert.match(root.textContent, /14 Feb 2026 or earlier/);
 });
 test("a failed operation that locks the vault removes private markup and shows its error", async (t) => {
   const dom = new JSDOM('<div id="app"></div>', { url: "https://example.test/lush-inventory/", pretendToBeVisual: true });

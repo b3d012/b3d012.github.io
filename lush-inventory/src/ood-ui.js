@@ -1,5 +1,5 @@
 import { addMonths, dubaiToday, parseDate } from "./expiry-model.js";
-import { archiveOODCount, OOD_BUCKETS, oodBucketValue, oodTotals, oodWindows, updateOODRow } from "./ood-count.js";
+import { archiveOODCount, OOD_BUCKETS, oodBucketValue, oodProductionRanges, oodTotals, oodWindows, updateOODRow } from "./ood-count.js";
 import { exportOODCount } from "./xlsx-adapter.js";
 import { countAreas, countTitle, namedWorkbook } from "./count-naming.js";
 
@@ -21,14 +21,17 @@ export function renderOODCounts(api, page = "entry", archiveId) {
   }
 
   const [today, first, second, third] = oodWindows(count.checkedOn);
-  const details = `<details class="oodGuide"><summary>Expiry windows and date guide</summary><p>Use the printed off-shelf date when available. Otherwise use production date + ${count.shelfLifeMonths} calendar months. Count each item once.</p><dl>${OOD_BUCKETS.map(([, label], i) => `<dt>${label}</dt><dd>${[
+  const rangeLabels = oodProductionRanges(count.checkedOn, count.shelfLifeMonths).map(([from, through]) =>
+    !from ? `${date(through)} or earlier` : !through ? `${date(from)} or later` : `${date(from)} – ${date(through)}`);
+  const details = `<details class="oodGuide"><summary>Using a printed expiry or off-shelf date?</summary><p>If the product has a printed expiry date, use the expiry ranges below. The dates above the quantity fields are production dates, based on ${count.shelfLifeMonths} calendar months. Count each item once.</p><dl>${OOD_BUCKETS.map(([, label], i) => `<dt>${label}</dt><dd>${[
     `Through ${date(today)}, including today`, `After ${date(today)} through ${date(first)}`, `After ${date(first)} through ${date(second)}`,
     `After ${date(second)} through ${date(third)}`, `After ${date(third)}`,
   ][i]}</dd>`).join("")}</dl></details>`;
   const categories = [...new Set(count.products.map((p) => p.category))].sort();
   screen(`<section class="coordHeading"><div class="headerLine"><div><div class="eyebrow">${saved ? "Saved OOD count" : editing ? "Expiry stocktake" : "Final check"}</div><h1>${editing ? "OOD Count" : saved ? "Saved OOD Count" : "Review OOD Count"}</h1><p><span id="oodCountTitle">${e(countTitle(count))}</span> · ${count.products.length} products · Checked ${date(count.checkedOn)}</p>${count.countMode ? `<p class="small muted">Source: ${e(count.fileName)}</p>` : ""}</div><div class="actions coordActions">${editing ? button("reviewOOD", "Review count", "primary") : (saved ? button("backOODHistory", "Back to history") : button("editOOD", "Back to count")) + button("exportOOD", "Download Excel", "primary") + (saved ? "" : button("archiveOOD", "Save to OOD History", "primary"))}</div></div></section>
-    ${editing ? `<label class="coordField oodDate">Check date<input id="oodCountDate" type="date" max="${dubaiToday()}" value="${e(count.checkedOn)}"></label><label class="coordField">Areas<input id="oodAreas" maxlength="200" value="${e(count.areaLabel ?? countAreas(count).slice(0, 200).trimEnd())}" placeholder="${e(countAreas(count))}"></label>` : ""}
+    ${editing ? `<div class="coordForm"><label class="coordField">Check date<input id="oodCountDate" type="date" max="${dubaiToday()}" value="${e(count.checkedOn)}"></label><label class="coordField">Shelf life (months)<input id="oodShelfLife" type="number" min="1" max="120" step="1" value="${count.shelfLifeMonths}"></label><label class="coordField wide">Areas<input id="oodAreas" maxlength="200" value="${e(count.areaLabel ?? countAreas(count).slice(0, 200).trimEnd())}" placeholder="${e(countAreas(count))}"></label></div>` : ""}
     ${details}
+    <p class="small"><strong>Production dates</strong> · ${count.shelfLifeMonths} calendar months of shelf life</p>
     ${count.warnings.length ? `<details class="notice"><summary>Stock file notes (${count.warnings.length})</summary><ul>${count.warnings.map((w) => `<li>${e(w)}</li>`).join("")}</ul></details>` : ""}
     <p class="small muted">${editing ? "Enter the actual quantity in each bucket. The first four buckets start at zero. Fill in More than 3 Months, even if it is zero. Use Confirm zero when no units are found." : "Excel variance = On Hand minus Counted (positive is a shortage). The screen shows Counted minus On Hand, like Cycle Count."}</p>
     <div class="oodProgress" id="oodProgress"></div><p id="oodSaveStatus" class="small muted" role="status"></p>
@@ -58,7 +61,7 @@ export function renderOODCounts(api, page = "entry", archiveId) {
     }).map((p) => {
       const t = oodTotals(p), i = rowIndex.get(p.id);
       return `<article class="product oodProduct ${t.state}" data-ood-row="${i}"><div class="productTop"><div><div class="productName">${e(p.description)}</div><div class="productMeta">PLU ${e(p.plu)} · ${e(p.category)}${p.unit ? ` · ${e(p.unit)}` : ""}</div></div><div class="onHand">On Hand<b>${n(p.onHand)}</b></div></div>
-      <div class="oodBuckets">${OOD_BUCKETS.map(([key, label]) => `<label class="field"><span>${label}</span>${editing ? `<input aria-label="${label} for ${e(p.description)}" inputmode="decimal" autocomplete="off" data-bucket="${key}" value="${e(p.buckets[key])}">` : `<strong>${n(oodBucketValue(p, key, t.complete))}</strong>`}</label>`).join("")}</div>
+      <div class="oodBuckets">${OOD_BUCKETS.map(([key, label], index) => `<label class="field"><span class="oodBucketCaption"><strong class="oodProductionRange">${e(rangeLabels[index])}</strong><span>${label}</span></span>${editing ? `<input aria-label="${label} for ${e(p.description)}; produced ${e(rangeLabels[index])}" inputmode="decimal" autocomplete="off" data-bucket="${key}" value="${e(p.buckets[key])}">` : `<strong>${n(oodBucketValue(p, key, t.complete))}</strong>`}</label>`).join("")}</div>
       <div class="oodRowSummary"><div data-ood-summary>${summary(t)}</div>${editing && !p.confirmed ? '<button type="button" class="secondary" data-ood-zero>Confirm zero</button>' : ""}</div></article>`;
     }).join("") || '<section class="card empty">No products match these filters.</section>';
   };
@@ -101,6 +104,19 @@ export function renderOODCounts(api, page = "entry", archiveId) {
       catch (error) { event.target.value = current().checkedOn; status.textContent = error.message; return; }
       if (current().products.some((p) => p.confirmed) && !window.confirm("Changing the date shifts the expiry windows. Keep the current quantities and check their buckets again?")) { event.target.value = current().checkedOn; return; }
       work(async () => { await save({ ...current(), checkedOn }); if (list.isConnected) show("entry"); });
+    };
+    root.querySelector("#oodShelfLife").onchange = (event) => {
+      const shelfLifeMonths = Number(event.target.value);
+      if (!Number.isInteger(shelfLifeMonths) || shelfLifeMonths < 1 || shelfLifeMonths > 120) {
+        event.target.value = current().shelfLifeMonths;
+        status.textContent = "Enter a whole number of months from 1 to 120.";
+        return;
+      }
+      if (shelfLifeMonths === current().shelfLifeMonths) return;
+      if (current().products.some((p) => p.confirmed) && !window.confirm("Changing shelf life shifts the expiry windows. Keep the current quantities and check their buckets again?")) {
+        event.target.value = current().shelfLifeMonths; return;
+      }
+      work(async () => { await save({ ...current(), shelfLifeMonths }); if (list.isConnected) show("entry"); });
     };
     root.querySelector("#reviewOOD").onclick = () => show("review");
   } else {

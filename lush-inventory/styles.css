@@ -16,6 +16,8 @@
 .oodBuckets{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-top:15px}
 .oodBuckets .field{display:flex;flex-direction:column;justify-content:space-between;gap:7px;min-width:0;font-size:13px;font-weight:800;color:var(--muted)}
 .oodBuckets .field>strong{color:var(--ink);font-size:20px}
+.oodBucketCaption{display:grid;gap:4px;line-height:1.25}
+.oodProductionRange{color:var(--ink);font-size:15px}
 .oodRowSummary{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px}
 .oodRowSummary [data-ood-summary]{display:flex;align-items:center;gap:8px 16px;flex-wrap:wrap}
 .oodRowSummary span{font-size:13px;color:var(--muted)}

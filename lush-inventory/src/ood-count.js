@@ -1,5 +1,5 @@
 import { parseCountValue } from "./count-model.js";
-import { addMonths, parseDate } from "./expiry-model.js";
+import { addDays, addMonths, parseDate } from "./expiry-model.js";
 import { validateCountNaming } from "./count-naming.js";
 
 export const OOD_BUCKETS = [
@@ -23,6 +23,22 @@ export function createOODCount(source, checkedOn, shelfLifeMonths) {
 
 export function oodWindows(checkedOn) {
   return [checkedOn, ...[1, 2, 3].map((months) => addMonths(checkedOn, months))];
+}
+
+export function oodProductionRanges(checkedOn, shelfLifeMonths) {
+  const cutoffs = oodWindows(checkedOn).map((expiry) => {
+    const cutoff = parseDate(expiry);
+    const day = cutoff.getUTCDate();
+    const expiryIsMonthEnd = parseDate(addDays(expiry, 1)).getUTCDate() === 1;
+    cutoff.setUTCDate(1);
+    cutoff.setUTCMonth(cutoff.getUTCMonth() - shelfLifeMonths);
+    const lastDay = new Date(cutoff);
+    lastDay.setUTCMonth(lastDay.getUTCMonth() + 1, 0);
+    // At month end, later production days can share the same clamped expiry.
+    cutoff.setUTCDate(expiryIsMonthEnd ? lastDay.getUTCDate() : Math.min(day, lastDay.getUTCDate()));
+    return cutoff.toISOString().slice(0, 10);
+  });
+  return OOD_BUCKETS.map((_, i) => [i ? addDays(cutoffs[i - 1], 1) : null, cutoffs[i] ?? null]);
 }
 
 export function updateOODRow(count, id, key, value) {

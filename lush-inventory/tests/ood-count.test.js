@@ -3,12 +3,28 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import XLSX from "xlsx";
 import { importInventory, exportOODCount } from "../src/xlsx-adapter.js";
-import { createOODCount, updateOODRow, oodTotals, archiveOODCount } from "../src/ood-count.js";
+import { createOODCount, updateOODRow, oodTotals, archiveOODCount, oodProductionRanges } from "../src/ood-count.js";
 import { emptyVault, validateVault } from "../src/coordinator-store.js";
 
 globalThis.XLSX = XLSX;
 const source = await readFile(new URL("./fixtures/PreChanges.xlsx", import.meta.url));
 const makeCount = () => createOODCount(importInventory(source, "Weekly.xlsx"), "2026-10-31", 7);
+
+test("production ranges match the approved example and honor different shelf lives", () => {
+  assert.deepEqual(oodProductionRanges("2026-11-14", 7), [
+    [null, "2026-04-14"], ["2026-04-15", "2026-05-14"], ["2026-05-15", "2026-06-14"],
+    ["2026-06-15", "2026-07-14"], ["2026-07-15", null],
+  ]);
+  assert.deepEqual(oodProductionRanges("2026-11-14", 8)[0], [null, "2026-03-14"]);
+});
+
+test("month-end cutoffs include production days that share a clamped expiry", () => {
+  assert.deepEqual(oodProductionRanges("2027-02-28", 7), [
+    [null, "2026-07-31"], ["2026-08-01", "2026-08-28"], ["2026-08-29", "2026-09-28"],
+    ["2026-09-29", "2026-10-28"], ["2026-10-29", null],
+  ]);
+  assert.deepEqual(oodProductionRanges("2028-02-29", 7)[0], [null, "2027-07-31"]);
+});
 
 test("physical quantities in all five buckets expose shortages, including decimals and confirmed zero", () => {
   let count = makeCount();
