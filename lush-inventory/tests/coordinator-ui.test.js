@@ -17,6 +17,7 @@ test("coordinator unlocks, archives, records OOD and removes private markup on l
   t.after(() => { lockCoordinator(); dom.window.close(); });
   const root = document.getElementById("app");
   const count = { schemaVersion: 2, id: "ui-count", fileName: "ui.xlsx", importedAt: "2026-10-01T10:00:00Z", postingDate: "2026-10-01", products: [{ id: "p", plu: "1", department: "HAIR", unit: "PCS", category: "A", description: "Item", cost: 2, onHand: 3, display: "2", cupboard: "0", storeRoom: "0", confirmed: true, provenance: "physical-recount" }] };
+  Object.assign(count, { countMode: "pre-inventory", countDate: "2026-10-01", areaLabel: "Hair and Gifts" });
   count.products.push({ ...count.products[0], id: "q", plu: "2", description: "Related item", onHand: 1 });
   count.products.push({ ...count.products[0], id: "ambiguous", plu: "1", department: "GIFTS", unit: "KG", description: "Different identity" });
   mountCoordinator(root, { getActiveCount: () => count, saveActiveCount: async () => {}, onExit: () => {}, toast: () => {} });
@@ -29,6 +30,13 @@ test("coordinator unlocks, archives, records OOD and removes private markup on l
   await waitFor(() => root.querySelector("#archiveCurrent"));
   root.querySelector("#archiveCurrent").click();
   await waitFor(() => root.querySelector("#allHistory"));
+  assert.equal(root.querySelector("h1").textContent, "Pre_Inventory - Area Hair and Gifts - 01.10.2026");
+  root.querySelector("#allHistory").click();
+  const mode = root.querySelector("#historyMode");
+  mode.value = "pre-inventory"; mode.dispatchEvent(new window.Event("change"));
+  const search = root.querySelector("#historySearch");
+  search.value = "Pre_Inventory"; search.dispatchEvent(new window.Event("input"));
+  root.querySelector('[data-archive="ui-count"]').click();
   root.querySelector('[data-outcome="p"]').click();
   const outcome = root.querySelector("#outcomeForm");
   outcome.elements.declaredQuantity.value = "3";
@@ -89,6 +97,10 @@ test("OOD workbook count saves separately, resumes after lock and opens a read-o
   Object.defineProperty(upload, "files", { value: [new File([bytes], "OOD Weekly.xlsx")] });
   upload.dispatchEvent(new window.Event("change", { bubbles: true }));
   await waitFor(() => root.querySelector("[data-bucket]"));
+  const areas = root.querySelector("#oodAreas");
+  areas.value = "Skincare and Mouth";
+  areas.dispatchEvent(new window.Event("input", { bubbles: true }));
+  assert.match(root.querySelector("#oodCountTitle").textContent, /^OOD Count - Area Skincare and Mouth - /);
   const field = root.querySelector('[data-bucket="later"]');
   field.value = "7"; field.dispatchEvent(new window.Event("input", { bubbles: true }));
   assert.match(field.closest("article").textContent, /Variance −1|Variance -1/);
@@ -99,6 +111,7 @@ test("OOD workbook count saves separately, resumes after lock and opens a read-o
   root.querySelector("#reviewOOD").click();
   root.querySelector("#archiveOOD").click();
   await waitFor(() => root.querySelector("[data-ood-archive]"));
+  assert.match(root.querySelector("[data-ood-archive]").textContent, /^OOD Count - Area Skincare and Mouth - /);
   root.querySelector("[data-ood-archive]").click();
   assert.match(root.textContent, /OOD Weekly.xlsx/);
   assert.match(root.textContent, /Variance −1|Variance -1/);

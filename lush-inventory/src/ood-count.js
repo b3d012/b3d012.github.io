@@ -1,5 +1,6 @@
 import { parseCountValue } from "./count-model.js";
 import { addMonths, parseDate } from "./expiry-model.js";
+import { validateCountNaming } from "./count-naming.js";
 
 export const OOD_BUCKETS = [
   ["pastDue", "Already OOD"],
@@ -11,7 +12,7 @@ export const OOD_BUCKETS = [
 
 export function createOODCount(source, checkedOn, shelfLifeMonths) {
   const { id, fileName, importedAt, postingDate, warnings } = source;
-  return { id, fileName, importedAt, postingDate, warnings, checkedOn, shelfLifeMonths,
+  return { id, fileName, importedAt, postingDate, warnings, checkedOn, shelfLifeMonths, countMode: "ood",
     products: source.products.map(({ id, category, plu, description, onHand, department, unit }) => ({
       id, category, plu, description, onHand, department, unit, confirmed: false, entered: [],
       buckets: Object.fromEntries(OOD_BUCKETS.map(([key]) => [key, key === "later" ? "" : "0"])),
@@ -50,7 +51,7 @@ export function oodTotals(product) {
 
 export function archiveOODCount(vault, archivedAt = new Date().toISOString()) {
   if (!vault.oodDraft?.products.some((p) => OOD_BUCKETS.some(([key]) => oodBucketValue(p, key, oodTotals(p).complete) !== null))) throw new Error("Enter at least one valid quantity before saving to history.");
-  const saved = structuredClone({ ...vault.oodDraft, archivedAt });
+  const saved = structuredClone({ ...vault.oodDraft, countMode: "ood", archivedAt });
   return { ...vault, oodDraft: null, oodCounts: [saved, ...(vault.oodCounts || [])] };
 }
 
@@ -66,6 +67,7 @@ export function validateOODRecords(vault) {
         !Array.isArray(count.products) || !count.products.length ||
         !Array.isArray(count.warnings) || count.warnings.some((s) => typeof s !== "string")) invalid();
     ids.add(count.id);
+    validateCountNaming(count, true);
     parseDate(count.checkedOn); oodWindows(count.checkedOn);
     if (count.postingDate != null) parseDate(count.postingDate);
     const rowIds = new Set();

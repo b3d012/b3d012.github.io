@@ -3,6 +3,7 @@ import { filterProducts, filterReviewProducts, updateProductField } from "./app-
 import { importInventory, downloadWorkbook } from "./xlsx-adapter.js";
 import { loadActiveCount, saveActiveCount, clearActiveCount, createBackup, restoreBackup } from "./count-store.js";
 import { mountCoordinator } from "./coordinator-ui.js";
+import { REGULAR_MODES, countAreas, countModeLabel, countTitle, startRegularCount } from "./count-naming.js";
 
 const root = document.getElementById("app");
 const toastNode = document.getElementById("toast");
@@ -37,7 +38,7 @@ function downloadText(text, name, type) {
 }
 
 function topbar() {
-  return `<div class="topbar"><div class="brand">Lush Inventory <span class="version">2.2</span></div><div class="actions"><button id="coordinator" class="secondary">Coordinator</button><button id="installApp" class="secondary install${installPrompt ? " show" : ""}">Install app</button></div></div>`;
+  return `<div class="topbar"><div class="brand">Lush Inventory <span class="version">2.3</span></div><div class="actions"><button id="coordinator" class="secondary">Coordinator</button><button id="installApp" class="secondary install${installPrompt ? " show" : ""}">Install app</button></div></div>`;
 }
 
 function openCoordinator() {
@@ -55,7 +56,7 @@ function renderHome() {
     root.innerHTML = `${topbar()}<section class="card hero"><div class="eyebrow">Weekly stock count</div><h1>Weekly inventory, without the paperwork.</h1><p>Upload the original Excel export. The app prepares the counting list automatically and keeps everything saved on this tablet.</p><div class="actions">${fileUpload()}<label class="upload secondary">Restore backup<input id="backupUpload" type="file" accept="application/json,.json"></label></div></section>`;
   } else {
     const summary = summarizeProducts(activeCount.products);
-    root.innerHTML = `${topbar()}<section class="card savedCard"><div class="eyebrow">Current count</div><h1>${escapeHtml(activeCount.fileName)}</h1><p class="productMeta">Imported ${escapeHtml(new Date(activeCount.importedAt).toLocaleString())}</p><div class="savedMeta"><div class="metric">Products<b>${summary.total}</b></div><div class="metric">Completed<b>${summary.complete}</b></div><div class="metric">Progress<b>${summary.percent}%</b></div></div><div class="actions"><button id="continueCount" class="primary">Continue current count</button>${fileUpload("Start new count", "secondary")}<button id="downloadBackup" class="secondary">Download backup</button><label class="upload secondary">Restore backup<input id="backupUpload" type="file" accept="application/json,.json"></label><button id="clearCount" class="danger">Delete current count</button></div></section>`;
+    root.innerHTML = `${topbar()}<section class="card savedCard"><div class="eyebrow">Current count</div><h1>${escapeHtml(countTitle(activeCount))}</h1><p class="productMeta">Imported ${escapeHtml(new Date(activeCount.importedAt).toLocaleString())}</p><div class="savedMeta"><div class="metric">Products<b>${summary.total}</b></div><div class="metric">Completed<b>${summary.complete}</b></div><div class="metric">Progress<b>${summary.percent}%</b></div></div><div class="actions"><button id="continueCount" class="primary">Continue current count</button>${fileUpload("Start new count", "secondary")}<button id="downloadBackup" class="secondary">Download backup</button><label class="upload secondary">Restore backup<input id="backupUpload" type="file" accept="application/json,.json"></label><button id="clearCount" class="danger">Delete current count</button></div></section>`;
   }
   bindCommon();
 }
@@ -65,8 +66,16 @@ function renderPreview() {
   const countCategories = new Set(pendingCount.products.map((product) => product.category)).size;
   root.innerHTML = `${topbar()}<section class="card savedCard"><div class="eyebrow">Import preview</div><h1>${escapeHtml(pendingCount.fileName)}</h1><div class="savedMeta"><div class="metric">Products<b>${pendingCount.products.length}</b></div><div class="metric">Categories<b>${countCategories}</b></div><div class="metric">Columns found<b>4/4</b></div></div><div class="notice">Your current saved count will not be replaced until you press Start counting.</div><div class="tableWrap"><table class="previewTable"><thead><tr><th>Category</th><th>PLU</th><th>Description</th><th>On Hand</th></tr></thead><tbody>${preview.map((product) => `<tr><td>${escapeHtml(product.category)}</td><td>${escapeHtml(product.plu)}</td><td>${escapeHtml(product.description)}</td><td>${formatNumber(product.onHand)}</td></tr>`).join("")}</tbody></table></div><div class="actions"><button id="cancelPreview" class="secondary">Cancel</button><button id="confirmImport" class="primary">Start counting</button></div></section>`;
   if (pendingCount.warnings?.length) root.querySelector(".notice").insertAdjacentHTML("afterend", `<div class="notice">${pendingCount.warnings.map(escapeHtml).join("<br>")}</div>`);
-  if (activeCount) root.querySelector(".actions:last-child").insertAdjacentHTML("beforebegin", `<div class="notice">Before replacing ${escapeHtml(activeCount.fileName)}, archive it in Coordinator or download a backup.</div><div class="actions" style="margin-bottom:14px"><button id="archiveBeforeReplace" class="secondary">Archive current count</button><button id="backupBeforeReplace" class="secondary">Download current count backup</button></div>`);
+  if (activeCount) root.querySelector(".actions:last-child").insertAdjacentHTML("beforebegin", `<div class="notice">Before replacing ${escapeHtml(countTitle(activeCount))}, archive it in Coordinator or download a backup.</div><div class="actions" style="margin-bottom:14px"><button id="archiveBeforeReplace" class="secondary">Archive current count</button><button id="backupBeforeReplace" class="secondary">Download current count backup</button></div>`);
   bindCommon();
+  const start = document.getElementById("confirmImport");
+  start.parentElement.insertAdjacentHTML("beforebegin", `<div class="coordForm"><label class="coordField">Count mode<select id="countMode"><option value="">Choose a count mode</option>${REGULAR_MODES.map(([key, label]) => `<option value="${key}">${label}</option>`).join("")}</select></label><label class="coordField">Areas<input id="countAreas" maxlength="200" placeholder="${escapeHtml(countAreas(pendingCount))}" value="${escapeHtml(pendingCount.areaLabel || "")}"></label></div>`);
+  const mode = document.getElementById("countMode");
+  const areas = document.getElementById("countAreas");
+  mode.value = pendingCount.countMode || "";
+  start.disabled = !mode.value;
+  mode.onchange = () => { pendingCount.countMode = mode.value; start.disabled = !mode.value; };
+  areas.oninput = () => { pendingCount.areaLabel = areas.value; };
   const archiveButton = document.getElementById("archiveBeforeReplace");
   if (archiveButton) archiveButton.onclick = openCoordinator;
   const backupButton = document.getElementById("backupBeforeReplace");
@@ -75,8 +84,10 @@ function renderPreview() {
   document.getElementById("confirmImport").onclick = async () => {
     if (activeCount && !replacementReady) { alert("Archive your current count or download its backup before starting the new one."); return; }
     if (activeCount && !confirm(`Start ${pendingCount.fileName} and replace the active counting screen? Archived coordinator records remain saved.`)) return;
-    try { await saveActiveCount(pendingCount); } catch (error) { alert(error.message); return; }
-    activeCount = pendingCount; pendingCount = null; replacementReady = false;
+    const next = startRegularCount(pendingCount, mode.value, areas.value);
+    start.disabled = true;
+    try { await saveActiveCount(next); } catch (error) { start.disabled = false; alert(error.message); return; }
+    activeCount = next; pendingCount = null; replacementReady = false;
     category = "ALL";
     query = "";
     renderCount();
@@ -85,7 +96,7 @@ function renderPreview() {
 }
 
 function headerMarkup(summary) {
-  return `<div class="shellHeader"><div class="headerLine"><div><div class="eyebrow">${escapeHtml(activeCount.fileName)}</div><h1>Cycle Count</h1></div><div class="actions"><button id="home" class="secondary">Home</button><button id="review" class="primary">Review ${summary.complete}/${summary.total}</button></div></div><div class="progressBox"><span>${summary.complete} of ${summary.total} products complete</span><span>${summary.percent}%</span><div class="bar"><span style="width:${summary.percent}%"></span></div></div><p class="small muted countHint">MAX accepts a total already verified at pre-inventory. Zero defaults stay unconfirmed until you edit or confirm a product.</p></div>`;
+  return `<div class="shellHeader"><div class="headerLine"><div><div class="eyebrow">${escapeHtml(countTitle(activeCount))}</div><h1>${countModeLabel(activeCount)}</h1></div><div class="actions"><button id="home" class="secondary">Home</button><button id="review" class="primary">Review ${summary.complete}/${summary.total}</button></div></div><div class="progressBox"><span>${summary.complete} of ${summary.total} products complete</span><span>${summary.percent}%</span><div class="bar"><span style="width:${summary.percent}%"></span></div></div><p class="small muted countHint">${activeCount.countMode === "pre-inventory" ? "" : "MAX accepts a total already verified at pre-inventory. "}Zero defaults stay unconfirmed until you edit or confirm a product.</p></div>`;
 }
 
 const provenanceLabel = (p) => p.provenance === "carried-forward" ? "Accepted from pre-inventory" : p.provenance === "legacy-count" ? "Existing saved count" : p.confirmed ? "Physical recount" : "";
@@ -94,7 +105,7 @@ function productMarkup(product) {
   const status = productStatus(product);
   const totals = productTotals(product);
   const inputs = [["display", "Display"], ["cupboard", "Cupboard"], ["storeRoom", "Store Room"]].map(([field, label]) => `<div class="field"><label for="${field}-${escapeHtml(product.id)}">${label}</label><div class="inputWrap"><input id="${field}-${escapeHtml(product.id)}" inputmode="decimal" autocomplete="off" aria-label="${label}" data-field="${field}" value="${escapeHtml(product[field])}"${parseCountValue(product[field]).kind === "invalid" ? ' aria-invalid="true"' : ""}></div></div>`).join("");
-  return `<article class="product ${status.key}" data-id="${escapeHtml(product.id)}"><div class="productTop"><div><div class="productName">${escapeHtml(product.description)}</div><div class="productMeta">PLU ${escapeHtml(product.plu)} · ${escapeHtml(product.category)}${product.unit ? ` · ${escapeHtml(product.unit)}` : ""}</div></div><div class="onHand"><span class="eyebrow">On Hand</span><b>${formatNumber(product.onHand)}</b></div></div><div class="countGrid">${inputs}<div class="totalBox"><span class="label">Counted / variance</span><div class="totalLine"><span data-total>${totals.complete ? formatNumber(totals.countedTotal) : "—"}</span><span data-variance>${totals.complete ? `${totals.variance > 0 ? "+" : ""}${formatNumber(totals.variance)}` : "—"}</span></div></div></div><div class="countFooter"><div><div class="statusBadge"><span class="statusDot"></span><span data-status>${status.label}</span></div><div data-provenance class="small muted">${provenanceLabel(product)}</div></div><div class="countActions"><button class="secondary" data-confirm-zero${[product.display, product.cupboard, product.storeRoom].every((v) => v === "0") && !product.confirmed ? "" : " hidden"}>Confirm zero</button><button class="maxButton" data-max title="Set Display to On Hand; accept pre-inventory total">MAX</button></div></div>${product.onHand < 0 ? '<p class="negativeWarning">System On Hand is negative. MAX accepts that value; recount if unexpected.</p>' : ""}</article>`;
+  return `<article class="product ${status.key}" data-id="${escapeHtml(product.id)}"><div class="productTop"><div><div class="productName">${escapeHtml(product.description)}</div><div class="productMeta">PLU ${escapeHtml(product.plu)} · ${escapeHtml(product.category)}${product.unit ? ` · ${escapeHtml(product.unit)}` : ""}</div></div><div class="onHand"><span class="eyebrow">On Hand</span><b>${formatNumber(product.onHand)}</b></div></div><div class="countGrid">${inputs}<div class="totalBox"><span class="label">Counted / variance</span><div class="totalLine"><span data-total>${totals.complete ? formatNumber(totals.countedTotal) : "—"}</span><span data-variance>${totals.complete ? `${totals.variance > 0 ? "+" : ""}${formatNumber(totals.variance)}` : "—"}</span></div></div></div><div class="countFooter"><div><div class="statusBadge"><span class="statusDot"></span><span data-status>${status.label}</span></div><div data-provenance class="small muted">${provenanceLabel(product)}</div></div><div class="countActions"><button class="secondary" data-confirm-zero${[product.display, product.cupboard, product.storeRoom].every((v) => v === "0") && !product.confirmed ? "" : " hidden"}>Confirm zero</button>${activeCount.countMode === "pre-inventory" ? "" : '<button class="maxButton" data-max title="Set Display to On Hand; accept pre-inventory total">MAX</button>'}</div></div>${product.onHand < 0 ? '<p class="negativeWarning">System On Hand is negative. Check the system quantity if unexpected.</p>' : ""}</article>`;
 }
 
 function renderCount() {
@@ -158,7 +169,8 @@ function bindCount() {
       refreshProductCard(card.dataset.id);
       try { await saveActiveCount(activeCount); saveError = false; toast("Saved"); } catch (error) { saveError = true; toast(`Not saved: ${error.message}. Download a backup.`); }
     };
-    card.querySelector("[data-max]").onclick = () => applyAction(applyMax);
+    const max = card.querySelector("[data-max]");
+    if (max) max.onclick = () => applyAction(applyMax);
     card.querySelector("[data-confirm-zero]").onclick = () => applyAction(confirmZero);
   });
 }

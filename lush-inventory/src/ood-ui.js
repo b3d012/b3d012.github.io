@@ -1,6 +1,7 @@
 import { addMonths, dubaiToday, parseDate } from "./expiry-model.js";
 import { archiveOODCount, createOODCount, OOD_BUCKETS, oodBucketValue, oodTotals, oodWindows, updateOODRow } from "./ood-count.js";
 import { exportOODCount, importInventory } from "./xlsx-adapter.js";
+import { countAreas, countTitle, namedWorkbook } from "./count-naming.js";
 
 const states = { "not-started": "Not started", "in-progress": "Incomplete", invalid: "Check quantities", matching: "Matches", under: "Shortage", over: "Extra stock" };
 
@@ -16,7 +17,7 @@ export function renderOODCounts(api, page = "entry", archiveId) {
   };
   const counts = getVault().oodCounts || [];
   if (page === "history") {
-    screen(`<section class="coordHeading"><h1>OOD Count History</h1><p>Open a saved count to check the original On Hand, expiry quantities and variance, or download it again.</p></section>${counts.length ? counts.map((c, i) => `<button class="reviewRow" data-ood-archive="${i}"><span class="reviewRowTop"><span>${e(c.fileName)}</span><span>${date(c.checkedOn)}</span></span><span class="reviewNums">${e([...new Set(c.products.map((p) => p.department || p.category))].join(", "))} · ${c.products.filter((p) => oodTotals(p).complete).length}/${c.products.length} confirmed · Saved ${date(c.archivedAt)}</span></button>`).join("") : '<section class="card empty">No saved OOD counts yet.</section>'}`);
+    screen(`<section class="coordHeading"><h1>OOD Count History</h1><p>Open a saved count to check the original On Hand, expiry quantities and variance, or download it again.</p></section>${counts.length ? counts.map((c, i) => `<button class="reviewRow" data-ood-archive="${i}"><span class="reviewRowTop"><span>${e(countTitle(c))}</span><span>${date(c.checkedOn)}</span></span><span class="reviewNums">${e([...new Set(c.products.map((p) => p.department || p.category))].join(", "))} · ${c.products.filter((p) => oodTotals(p).complete).length}/${c.products.length} confirmed · Saved ${date(c.archivedAt)}</span></button>`).join("") : '<section class="card empty">No saved OOD counts yet.</section>'}`);
     root.querySelectorAll("[data-ood-archive]").forEach((b) => b.onclick = () => show("archive", counts[Number(b.dataset.oodArchive)].id));
     return;
   }
@@ -24,7 +25,7 @@ export function renderOODCounts(api, page = "entry", archiveId) {
   const draft = getVault().oodDraft;
   const saved = page === "archive";
   const editing = page === "entry";
-  const count = saved ? counts.find((c) => c.id === archiveId) : draft;
+  const count = saved ? counts.find((c) => c.id === archiveId) : draft && { ...draft, countMode: "ood" };
   const uploader = `<label class="upload ${draft ? "secondary" : "primary"}">${draft ? "Upload another stock file" : "Upload stock Excel"}<input id="oodUpload" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"></label>`;
   if (!count) {
     screen(`<section class="card coordPanel"><div class="eyebrow">Expiry stocktake</div><h1>OOD Count</h1><p>Use the same Excel stock file as Cycle Count. Enter the stock you actually find in each expiry window, then review any extra or missing quantities.</p><div class="actions coordActions">${uploader}</div></section>`);
@@ -38,8 +39,8 @@ export function renderOODCounts(api, page = "entry", archiveId) {
     `After ${date(second)} through ${date(third)}`, `After ${date(third)}`,
   ][i]}</dd>`).join("")}</dl></details>`;
   const categories = [...new Set(count.products.map((p) => p.category))].sort();
-  screen(`<section class="coordHeading"><div class="headerLine"><div><div class="eyebrow">${saved ? "Saved OOD count" : editing ? "Expiry stocktake" : "Final check"}</div><h1>${editing ? "OOD Count" : saved ? "Saved OOD Count" : "Review OOD Count"}</h1><p>${e(count.fileName)} · ${count.products.length} products · Checked ${date(count.checkedOn)}</p></div><div class="actions coordActions">${editing ? button("reviewOOD", "Review count", "primary") + uploader : (saved ? button("backOODHistory", "Back to history") : button("editOOD", "Back to count")) + button("exportOOD", "Download Excel", "primary") + (saved ? "" : button("archiveOOD", "Save to OOD History", "primary"))}</div></div></section>
-    ${editing ? `<label class="coordField oodDate">Check date<input id="oodCountDate" type="date" max="${dubaiToday()}" value="${e(count.checkedOn)}"></label>` : ""}
+  screen(`<section class="coordHeading"><div class="headerLine"><div><div class="eyebrow">${saved ? "Saved OOD count" : editing ? "Expiry stocktake" : "Final check"}</div><h1>${editing ? "OOD Count" : saved ? "Saved OOD Count" : "Review OOD Count"}</h1><p><span id="oodCountTitle">${e(countTitle(count))}</span> · ${count.products.length} products · Checked ${date(count.checkedOn)}</p>${count.countMode ? `<p class="small muted">Source: ${e(count.fileName)}</p>` : ""}</div><div class="actions coordActions">${editing ? button("reviewOOD", "Review count", "primary") + uploader : (saved ? button("backOODHistory", "Back to history") : button("editOOD", "Back to count")) + button("exportOOD", "Download Excel", "primary") + (saved ? "" : button("archiveOOD", "Save to OOD History", "primary"))}</div></div></section>
+    ${editing ? `<label class="coordField oodDate">Check date<input id="oodCountDate" type="date" max="${dubaiToday()}" value="${e(count.checkedOn)}"></label><label class="coordField">Areas<input id="oodAreas" maxlength="200" value="${e(count.areaLabel || "")}" placeholder="${e(countAreas(count))}"></label>` : ""}
     ${details}
     ${count.warnings.length ? `<details class="notice"><summary>Stock file notes (${count.warnings.length})</summary><ul>${count.warnings.map((w) => `<li>${e(w)}</li>`).join("")}</ul></details>` : ""}
     <p class="small muted">${editing ? "Enter the actual quantity in each bucket. The first four buckets start at zero. Fill in More than 3 Months, even if it is zero. Use Confirm zero when no units are found." : "Excel variance = On Hand minus Counted (positive is a shortage). The screen shows Counted minus On Hand, like Cycle Count."}</p>
@@ -99,6 +100,11 @@ export function renderOODCounts(api, page = "entry", archiveId) {
     save(next); syncProgress();
   }
   if (editing) {
+    root.querySelector("#oodAreas").oninput = (event) => {
+      const next = { ...current(), countMode: "ood", areaLabel: event.target.value.trim() || undefined };
+      root.querySelector("#oodCountTitle").textContent = countTitle(next);
+      save(next);
+    };
     list.oninput = (event) => { if (event.target.matches("[data-bucket]")) editRow(event.target, event.target.dataset.bucket, event.target.value); };
     list.onclick = (event) => { if (event.target.matches("[data-ood-zero]")) editRow(event.target, null, ""); };
     list.onfocusin = (event) => { if (event.target.matches("[data-bucket]") && event.target.value === "0") event.target.select(); };
@@ -117,7 +123,7 @@ export function renderOODCounts(api, page = "entry", archiveId) {
       const latest = current();
       if (latest.products.some((p) => !oodTotals(p).complete) && !window.confirm("Download this partial count? Unfinished rows show entered quantities, with totals and variance left blank.")) return;
       const name = latest.fileName.replace(/\.xlsx$/i, "").replace(/[^a-z0-9_-]+/gi, "-");
-      download(exportOODCount(latest), `${name}-OOD-${latest.checkedOn}.xlsx`, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      download(exportOODCount(latest), namedWorkbook(saved ? latest : { ...latest, countMode: "ood" }) || `${name}-OOD-${latest.checkedOn}.xlsx`, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
       toast("OOD Excel downloaded.");
     });
     const archive = root.querySelector("#archiveOOD");

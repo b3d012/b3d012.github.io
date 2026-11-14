@@ -5,7 +5,7 @@ Tablet-first offline inventory counting app for weekly shop cycle counts.
 ## Use
 
 1. Open the app and upload the untouched weekly `.xlsx` export.
-2. Confirm the detected products and categories.
+2. Confirm the detected products, choose **Pre Inventory** or **Cycle Count**, and optionally edit the suggested areas. The name uses the Dubai date the count starts; OOD uses its check date. It appears in History and the downloaded Excel filename. Older archives retain their original names.
 3. All locations start at zero, but a row stays unconfirmed until you edit it, confirm zero, or use MAX. MAX copies On Hand into Display, leaves the other locations zero, and records acceptance from pre-inventory.
 4. Review incomplete items and variances.
 5. Download the completed Excel workbook. The final Variance column shows On Hand minus the sum of Display, Cupboard, and Store Room. A positive value is a shortage; a negative value is an extra. Incomplete rows have a blank variance.
@@ -26,7 +26,7 @@ Download a **full backup** after finishing each count. It includes the current c
 
 ## Updating the installed tablet app
 
-Keep your saved browser data. **Do not uninstall the app or clear storage.** Open [the existing app](https://b3d012.github.io/lush-inventory/) online, then close and reopen it to load the updated offline shell. The top bar shows **2.2** after updating. The same installed shortcut continues to work; reinstalling is unnecessary. If moving to another browser or tablet, restore a full backup there.
+Keep your saved browser data. **Do not uninstall the app or clear storage.** Open [the existing app](https://b3d012.github.io/lush-inventory/) online, then close and reopen it to load the updated offline shell. The top bar shows **2.3** after updating. The same installed shortcut continues to work; reinstalling is unnecessary. If moving to another browser or tablet, restore a full backup there.
 
 ## Development
 

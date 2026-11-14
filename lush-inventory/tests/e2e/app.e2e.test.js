@@ -8,6 +8,7 @@ test("imports the weekly workbook and persists tablet counts", async ({ page }) 
   await expect(page.getByRole("heading", { name: "Weekly inventory, without the paperwork." })).toBeVisible();
   await page.locator('input[type="file"][accept*="xlsx"]').setInputFiles(fixture);
   await expect(page.locator(".metric").filter({ hasText: "Products" }).getByText("119", { exact: true })).toBeVisible();
+  await page.getByLabel("Count mode").selectOption("cycle");
   await page.getByRole("button", { name: "Start counting" }).click();
   await expect(page.getByText("VEGANESE 100G CONDITIONER", { exact: true })).toBeVisible();
   const first = page.locator(".product").first();
@@ -31,6 +32,7 @@ test("supports search and review status filters", async ({ page }) => {
     await page.getByRole("button", { name: "Continue current count" }).click();
   } else {
     await page.locator('input[type="file"][accept*="xlsx"]').setInputFiles(fixture);
+    await page.getByLabel("Count mode").selectOption("cycle");
     await page.getByRole("button", { name: "Start counting" }).click();
   }
   await page.getByPlaceholder("Search product or PLU").fill("2001063000000");

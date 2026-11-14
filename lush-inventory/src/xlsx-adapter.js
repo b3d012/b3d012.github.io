@@ -1,6 +1,7 @@
 import { productTotals } from "./count-model.js";
 import { offShelfDate } from "./expiry-model.js";
 import { OOD_BUCKETS, oodBucketValue, oodTotals, oodWindows } from "./ood-count.js";
+import { namedWorkbook } from "./count-naming.js";
 
 const REQUIRED = [
   { key: "category", label: "Category", aliases: ["category"] },
@@ -208,6 +209,8 @@ export function exportOODCount(count) {
 }
 
 export function exportFileName(count) {
+  const named = namedWorkbook(count);
+  if (named) return named;
   const base = String(count.fileName || "inventory").replace(/\.xlsx$/i, "").replace(/[^a-z0-9_-]+/gi, "-");
   const date = new Date().toISOString().slice(0, 10);
   return `${base}-counted-${date}.xlsx`;

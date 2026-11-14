@@ -1,3 +1,5 @@
+import { validateCountNaming } from "./count-naming.js";
+
 const DB_NAME = "lush-inventory-counter";
 const STORE_NAME = "counts";
 const ACTIVE_KEY = "active";
@@ -61,6 +63,7 @@ export function validateCountBackup(value) {
     throw new Error("This backup is not a valid Lush Inventory Counter backup.");
   }
   if (value.schemaVersion === 2 && (typeof value.id !== "string" || !value.id.trim())) throw new Error("Invalid count identifier in backup.");
+  validateCountNaming(value);
   if (new Set(value.products.map((p) => p?.id)).size !== value.products.length) throw new Error("Duplicate product identifier in backup.");
   for (const field of ["importedAt", "updatedAt", "archivedAt"]) if (value[field] != null) validateTimestamp(value[field]);
   if (value.postingDate != null) parseDate(value.postingDate);

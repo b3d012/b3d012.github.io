@@ -5,6 +5,8 @@ import { JSDOM } from "jsdom";
 import { setTimeout as delay } from "node:timers/promises";
 import { saveActiveCount, loadActiveCount } from "../src/count-store.js";
 import { lockCoordinator } from "../src/coordinator-ui.js";
+import XLSX from "xlsx";
+import { readFile } from "node:fs/promises";
 test("public counting defaults stay unconfirmed, MAX persists and invalid input stays incomplete", async (t) => {
   const dom = new JSDOM('<div id="app"></div><div id="toast"></div>', { url: "https://example.test/lush-inventory/", pretendToBeVisual: true });
   globalThis.window = dom.window; globalThis.document = dom.window.document;
@@ -32,4 +34,40 @@ test("public counting defaults stay unconfirmed, MAX persists and invalid input 
   document.querySelector("#review").click();
   assert.equal(document.querySelectorAll(".reviewRow img").length, 0);
   assert.ok(document.querySelector(".reviewRow").textContent.includes("<img src=x>"));
+});
+test("import preview requires a mode and saves a named Pre Inventory", async (t) => {
+  const dom = new JSDOM('<div id="app"></div><div id="toast"></div>', { url: "https://example.test/lush-inventory/", pretendToBeVisual: true });
+  globalThis.window = dom.window; globalThis.document = dom.window.document; globalThis.XLSX = XLSX;
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: dom.window.navigator });
+  globalThis.confirm = () => true;
+  t.after(() => dom.window.close());
+  await import("../src/app.js?mode-test");
+  document.querySelector("#clearCount").click();
+  const until = async (selector) => {
+    for (let i = 0; i < 100; i++) {
+      const node = document.querySelector(selector);
+      if (node) return node;
+      await delay(10);
+    }
+    throw new Error(`Missing ${selector}`);
+  };
+  const upload = await until("#xlsxUpload");
+  const fixture = await readFile(new URL("./fixtures/PreChanges.xlsx", import.meta.url));
+  Object.defineProperty(upload, "files", { value: [new File([fixture], "Journal.xlsx")] });
+  upload.dispatchEvent(new window.Event("change", { bubbles: true }));
+  const mode = await until("#countMode");
+  const start = document.querySelector("#confirmImport");
+  assert.equal(start.disabled, true);
+  assert.equal(document.querySelector("#countAreas").placeholder, "Haircare and Gifts");
+  mode.value = "pre-inventory"; mode.dispatchEvent(new window.Event("change"));
+  const areas = document.querySelector("#countAreas");
+  areas.value = "Skincare, Mouth and Makeup"; areas.dispatchEvent(new window.Event("input"));
+  start.click();
+  await until(".product");
+  assert.equal(document.querySelector("h1").textContent, "Pre Inventory");
+  assert.equal(document.querySelector("[data-max]"), null);
+  const saved = await loadActiveCount();
+  assert.equal(saved.countMode, "pre-inventory");
+  assert.equal(saved.areaLabel, "Skincare, Mouth and Makeup");
+  assert.equal(saved.fileName, "Journal.xlsx");
 });
