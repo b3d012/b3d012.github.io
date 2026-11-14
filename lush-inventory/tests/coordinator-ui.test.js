@@ -5,6 +5,8 @@ import { JSDOM } from "jsdom";
 import { setTimeout as delay } from "node:timers/promises";
 import { mountCoordinator, lockCoordinator } from "../src/coordinator-ui.js";
 import { lockVault } from "../src/coordinator-store.js";
+import XLSX from "xlsx";
+import { readFile } from "node:fs/promises";
 const OWNER_PIN = process.env.LUSH_TEST_PIN;
 if (!OWNER_PIN) throw new Error("Set LUSH_TEST_PIN to the configured owner PIN before running vault tests.");
 const waitFor = async (predicate) => { for (let i = 0; i < 100; i++) { if (predicate()) return; await delay(10); } throw new Error("UI did not reach expected state"); };
@@ -40,6 +42,7 @@ test("coordinator unlocks, archives, records OOD and removes private markup on l
   link.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
   await waitFor(() => root.querySelector("#linkForm")?.parentElement.querySelector("p.small")?.textContent.includes("Suspected wrong punch"));
   root.querySelector('[data-tab="ood"]').click();
+  root.querySelector("#batchRecords").click();
   root.querySelector("#newBatch").click();
   const form = root.querySelector("#batchForm");
   form.elements.plu.value = "1"; form.elements.plu.dispatchEvent(new window.Event("change", { bubbles: true }));
@@ -56,6 +59,7 @@ test("coordinator unlocks, archives, records OOD and removes private markup on l
   check.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
   await waitFor(() => root.textContent.includes("OTHER SECTION"));
   root.querySelector('[data-tab="ood"]').click();
+  root.querySelector("#batchRecords").click();
   assert.ok(root.querySelector("#oodCheckDate"));
   root.querySelector("#oodCheckDate").value = "2026-10-02";
   root.querySelector("#oodCheckDate").dispatchEvent(new window.Event("change", { bubbles: true }));
@@ -65,6 +69,41 @@ test("coordinator unlocks, archives, records OOD and removes private markup on l
   assert.ok(!root.textContent.includes("Private batch"));
   assert.ok(root.querySelector('[name="pin"]'));
   dom.window.close();
+});
+test("OOD workbook count saves separately, resumes after lock and opens a read-only archive", async (t) => {
+  const dom = new JSDOM('<div id="app"></div>', { url: "https://example.test/lush-inventory/", pretendToBeVisual: true });
+  globalThis.window = dom.window; globalThis.document = dom.window.document; globalThis.XLSX = XLSX;
+  window.confirm = () => true;
+  t.after(() => { lockCoordinator(); dom.window.close(); });
+  const root = document.getElementById("app");
+  mountCoordinator(root, { getActiveCount: () => null, onExit: () => {}, toast: () => {} });
+  const unlock = async () => {
+    root.querySelector('[name="pin"]').value = OWNER_PIN;
+    root.querySelector("#pinForm").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    await waitFor(() => root.querySelector('[data-tab="ood"]'));
+    root.querySelector('[data-tab="ood"]').click();
+  };
+  await unlock();
+  const bytes = await readFile(new URL("./fixtures/PreChanges.xlsx", import.meta.url));
+  const upload = root.querySelector("#oodUpload");
+  Object.defineProperty(upload, "files", { value: [new File([bytes], "OOD Weekly.xlsx")] });
+  upload.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await waitFor(() => root.querySelector("[data-bucket]"));
+  const field = root.querySelector('[data-bucket="later"]');
+  field.value = "7"; field.dispatchEvent(new window.Event("input", { bubbles: true }));
+  assert.match(field.closest("article").textContent, /Variance −1|Variance -1/);
+  lockCoordinator();
+  assert.doesNotMatch(root.textContent, /OOD Weekly/);
+  await unlock();
+  assert.equal(root.querySelector('[data-bucket="later"]').value, "7");
+  root.querySelector("#reviewOOD").click();
+  root.querySelector("#archiveOOD").click();
+  await waitFor(() => root.querySelector("[data-ood-archive]"));
+  root.querySelector("[data-ood-archive]").click();
+  assert.match(root.textContent, /OOD Weekly.xlsx/);
+  assert.match(root.textContent, /Variance −1|Variance -1/);
+  assert.equal(root.querySelectorAll("[data-bucket]").length, 0);
+  assert.ok(root.querySelector("#exportOOD"));
 });
 test("a failed operation that locks the vault removes private markup and shows its error", async (t) => {
   const dom = new JSDOM('<div id="app"></div>', { url: "https://example.test/lush-inventory/", pretendToBeVisual: true });

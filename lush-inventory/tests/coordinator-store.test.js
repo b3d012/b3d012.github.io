@@ -27,6 +27,17 @@ test("PIN change preserves vault and invalidates the old PIN", async () => {
   await store.changePin("4567", OWNER_PIN);
   store.lockVault();
 });
+test("locking during a queued draft save cancels a pending PIN change", async () => {
+  await store.unlockVault(OWNER_PIN);
+  const pendingDraft = store.saveOODDraft(null);
+  const pendingPin = store.changePin(OWNER_PIN, "4567");
+  store.lockVault();
+  await pendingDraft;
+  await assert.rejects(pendingPin, /locked/i);
+  assert.equal(store.isVaultUnlocked(), false);
+  await store.unlockVault(OWNER_PIN);
+  store.lockVault();
+});
 test("large history encrypts and serial saves keep the newest records", async () => {
   const vault = await store.unlockVault(OWNER_PIN);
   vault.events.push({ at: "2026-10-01", action: "x".repeat(180000) });

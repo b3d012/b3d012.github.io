@@ -1,5 +1,5 @@
-import { validateCountBackup, writeRecords } from "./count-store.js";
-import { validateEnvelope, decryptEnvelope, lockVault } from "./coordinator-store.js";
+import { validateCountBackup } from "./count-store.js";
+import { validateEnvelope, decryptEnvelope, replaceVaultRecords } from "./coordinator-store.js";
 
 const validated = new WeakMap();
 export function createFullBackup(activeCount, envelope) {
@@ -20,7 +20,6 @@ export async function validateFullBackup(json, pin) {
 export async function replaceFullState(state) {
   const safe = validated.get(state);
   if (!safe) throw new Error("Validate the backup before replacing saved data.");
-  lockVault();
-  await writeRecords([{ store: "counts", key: "active", value: safe.activeCount }, { store: "coordinator", key: "vault", value: safe.envelope }]);
+  await replaceVaultRecords([{ store: "counts", key: "active", value: safe.activeCount }, { store: "coordinator", key: "vault", value: safe.envelope }]);
   validated.delete(state);
 }

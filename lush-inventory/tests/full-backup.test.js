@@ -3,7 +3,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as backups from "../src/full-backup.js";
 import { saveActiveCount, loadActiveCount, writeRecords } from "../src/count-store.js";
-import { unlockVault, saveVault, loadEnvelope, lockVault, validateVault, emptyVault, decryptEnvelope } from "../src/coordinator-store.js";
+import { unlockVault, saveVault, saveOODDraft, loadEnvelope, lockVault, validateVault, emptyVault, decryptEnvelope } from "../src/coordinator-store.js";
+import { createOODCount } from "../src/ood-count.js";
 const OWNER_PIN = process.env.LUSH_TEST_PIN;
 if (!OWNER_PIN) throw new Error("Set LUSH_TEST_PIN to the configured owner PIN before running vault tests.");
 const count = { schemaVersion: 1, fileName: "keep.xlsx", products: [{ id: "p", plu: "1", category: "A", description: "Item", onHand: 2, display: "0", cupboard: "", storeRoom: "" }] };
@@ -31,6 +32,17 @@ test("full backup validates before atomic replacement and preserves both stores 
 });
 test("unvalidated full state cannot overwrite anything", async () => {
   await assert.rejects(() => backups.replaceFullState({ activeCount: null, envelope: null }), /validate/i);
+  assert.deepEqual(await loadActiveCount(), count);
+});
+test("restoring a backup cannot be overwritten by a queued OOD draft", async () => {
+  await unlockVault(OWNER_PIN);
+  const envelope = await loadEnvelope();
+  const verified = await backups.validateFullBackup(backups.createFullBackup(count, envelope), OWNER_PIN);
+  const draft = createOODCount({ ...count, id: "queued", importedAt: "2026-10-01T08:00:00Z", warnings: [] }, "2026-10-01", 7);
+  const pending = saveOODDraft(draft);
+  await backups.replaceFullState(verified);
+  await pending;
+  assert.deepEqual(await loadEnvelope(), envelope);
   assert.deepEqual(await loadActiveCount(), count);
 });
 test("a synchronous second-store failure rolls back the first write", async () => {

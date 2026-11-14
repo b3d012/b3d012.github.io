@@ -2,6 +2,7 @@ import { readRecord, writeRecords, validateCountBackup, validateTimestamp, valid
 import { RESOLUTIONS } from "./history-model.js";
 import { INITIAL_PIN } from "./pin-config.js";
 import { parseDate, offShelfDate } from "./expiry-model.js";
+import { validateOODRecords } from "./ood-count.js";
 
 const ITERATIONS = 250000;
 const encode = (bytes) => {
@@ -70,6 +71,7 @@ export function validateVault(vault) {
   }
   validateEvents(vault.events);
   if (vault.settings != null && (!object(vault.settings) || !Number.isInteger(vault.settings.shelfLifeMonths) || vault.settings.shelfLifeMonths < 1 || vault.settings.shelfLifeMonths > 120)) throw new Error("Invalid shelf-life settings in backup.");
+  validateOODRecords(vault);
   return vault;
 }
 
@@ -105,6 +107,7 @@ async function encryptVault(vault, key, salt) {
 export async function unlockVault(pin) {
   const started = ++epoch;
   session = null;
+  await queue; // Finish any submitted OOD draft edit before opening its saved state.
   const envelope = await loadEnvelope();
   let vault, key, salt;
   if (envelope) {
@@ -124,28 +127,47 @@ export async function unlockVault(pin) {
 }
 export function lockVault() { epoch += 1; session = null; }
 
+export function replaceVaultRecords(records) {
+  lockVault();
+  const operation = queue.then(() => writeRecords(records));
+  queue = operation.catch(() => {});
+  return operation;
+}
+
 export function saveVault(vault, activeCount) {
+  return enqueueSave(vault, activeCount, false);
+}
+
+export function saveOODDraft(draft) {
+  const snapshot = structuredClone(draft);
+  return enqueueSave((latest) => ({ ...latest, oodDraft: snapshot }), undefined, true);
+}
+
+function enqueueSave(vault, activeCount, finishAfterLock) {
   if (!session) return Promise.reject(new Error("Coordinator is locked. Unlock before saving."));
   const captured = session;
-  const candidate = structuredClone(validateVault(vault));
+  const update = typeof vault === "function" ? vault : () => snapshot;
+  const snapshot = typeof vault === "function" ? null : structuredClone(validateVault(vault));
   const publicCount = activeCount === undefined ? undefined : structuredClone(validateCountBackup(activeCount));
   const operation = queue.then(async () => {
-    if (epoch !== captured.epoch) throw new Error("Coordinator is locked. Unlock before saving.");
+    if (!finishAfterLock && epoch !== captured.epoch) throw new Error("Coordinator is locked. Unlock before saving.");
+    const candidate = validateVault(update(captured.vault));
     const envelope = await encryptVault(candidate, captured.key, captured.salt);
-    if (epoch !== captured.epoch) throw new Error("Coordinator locked before save. Please unlock and retry.");
+    if (!finishAfterLock && epoch !== captured.epoch) throw new Error("Coordinator locked before save. Please unlock and retry.");
     await writeRecords([{ store: "coordinator", key: "vault", value: envelope, expectedCiphertext: captured.ciphertext }, ...(publicCount === undefined ? [] : [{ store: "counts", key: "active", value: publicCount }])]);
-    if (epoch !== captured.epoch) throw new Error("Coordinator locked. Unlock to load your saved record.");
-    session.vault = candidate;
-    session.ciphertext = envelope.ciphertext;
-    return structuredClone(candidate);
+    captured.vault = candidate;
+    captured.ciphertext = envelope.ciphertext;
+    if (!finishAfterLock && epoch !== captured.epoch) throw new Error("Coordinator locked. Unlock to load your saved record.");
+    return finishAfterLock ? undefined : structuredClone(candidate);
   });
   queue = operation.catch(() => {});
   return operation;
 }
 export async function changePin(oldPin, newPin) {
   if (!session) throw new Error("Unlock before changing your PIN.");
-  await queue;
   const started = epoch;
+  await queue;
+  if (epoch !== started) throw new Error("Coordinator is locked. Retry the PIN change after unlocking.");
   const current = await loadEnvelope();
   const { vault } = await decryptEnvelope(current, oldPin);
   const salt = encode(crypto.getRandomValues(new Uint8Array(16)));

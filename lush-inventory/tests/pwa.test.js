@@ -28,7 +28,7 @@ test("upgrade precaches every runtime module and serves it offline within invent
   });
   let pending;
   listeners.install({ waitUntil: (promise) => pending = promise }); await pending;
-  for (const module of ["app", "app-logic", "count-model", "count-store", "xlsx-adapter", "coordinator-ui", "coordinator-store", "history-model", "expiry-model", "full-backup", "pin-config"]) {
+  for (const module of ["app", "app-logic", "count-model", "count-store", "xlsx-adapter", "coordinator-ui", "coordinator-store", "history-model", "expiry-model", "ood-count", "ood-ui", "full-backup", "pin-config"]) {
     let response;
     listeners.fetch({ request: { url: `${scope}src/${module}.js`, method: "GET", mode: "cors" }, respondWith: (promise) => response = promise });
     assert.equal((await response).status, 200, `${module} must open offline`);

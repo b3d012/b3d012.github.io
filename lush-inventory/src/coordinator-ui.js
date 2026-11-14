@@ -1,4 +1,5 @@
-import { unlockVault, saveVault, lockVault, isVaultUnlocked, changePin, loadEnvelope } from "./coordinator-store.js";
+import { unlockVault, saveVault, saveOODDraft, lockVault, isVaultUnlocked, changePin, loadEnvelope } from "./coordinator-store.js";
+import { renderOODCounts } from "./ood-ui.js";
 import { archiveCount, reviseOutcome, linkDiscrepancies, historySummary, compareSnapshots, RESOLUTIONS, isPhysical } from "./history-model.js";
 import { dubaiToday, addDays, expiryStatus, offShelfDate, saveExpiryRecord, recordDepartmentCheck, parseDate } from "./expiry-model.js";
 import { productTotals, summarizeProducts } from "./count-model.js";
@@ -11,6 +12,7 @@ const n = (value) => typeof value === "number" && Number.isFinite(value) ? new I
 const money = (value) => `AED ${new Intl.NumberFormat("en-GB", { maximumFractionDigits: 2 }).format(value)}`;
 const date = (value) => value ? new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeZone: "Asia/Dubai" }).format(new Date(value.length === 10 ? `${value}T12:00:00Z` : value)) : "Unknown";
 let root, context, vault, tab = "overview", selectedArchive = null, query = "", department = "ALL", risk = "risk", busy = false, timer, controller, assessmentDate;
+let draftWrite = Promise.resolve();
 
 function download(content, filename, type = "application/json") {
   const url = URL.createObjectURL(new Blob([content], { type }));
@@ -27,6 +29,7 @@ function exit() { clearTimeout(timer); controller?.abort(); lockVault(); vault =
 
 export function mountCoordinator(target, callbacks) {
   controller?.abort(); clearTimeout(timer); lockVault();
+  draftWrite = Promise.resolve();
   root = target; context = callbacks; vault = null; tab = "overview"; selectedArchive = null; query = ""; department = "ALL"; busy = false; assessmentDate = dubaiToday();
   controller = new window.AbortController();
   for (const event of ["pointerdown", "keydown"]) document.addEventListener(event, touch, { signal: controller.signal });
@@ -44,7 +47,7 @@ function renderLocked(message = "") {
     const pin = event.currentTarget.elements.pin.value;
     event.currentTarget.elements.pin.value = "";
     event.currentTarget.querySelector("button").disabled = true;
-    try { const unlocked = await unlockVault(pin); if (!root || !isVaultUnlocked()) return; vault = unlocked; busy = false; touch(); render(); }
+    try { const unlocked = await unlockVault(pin); if (!root || !isVaultUnlocked()) return; vault = unlocked; draftWrite = Promise.resolve(); busy = false; touch(); render(); }
     catch (error) { busy = false; if (root) renderLocked(error.message); }
   };
 }
@@ -58,12 +61,24 @@ function shell(content) {
 async function work(action) {
   if (busy) return;
   busy = true;
-  root.querySelectorAll("button").forEach((item) => item.disabled = true);
+  const controls = [...root.querySelectorAll("button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)")];
+  controls.forEach((item) => item.disabled = true);
   try { await action(); }
   catch (error) { if (root) { if (isVaultUnlocked()) root.querySelector("#coordinatorError").textContent = error.message; else { vault = null; renderLocked(error.message); } } }
-  finally { busy = false; root?.querySelectorAll("button").forEach((item) => item.disabled = false); }
+  finally { busy = false; controls.forEach((item) => item.disabled = false); }
 }
-async function persist(candidate, activeCount) { const saved = await saveVault(candidate, activeCount); if (!isVaultUnlocked()) throw new Error("Coordinator locked. Unlock to continue."); vault = saved; }
+async function persist(candidate, activeCount) { const saved = await saveVault(candidate, activeCount); if (!isVaultUnlocked()) throw new Error("Coordinator locked. Unlock to continue."); vault = saved; draftWrite = Promise.resolve(); }
+function renderOOD() {
+  renderOODCounts({
+    root, shell, e, n, date, button, getVault: () => vault, work, persist, download, toast: context.toast, showBatches: renderBatches,
+    autosave(next) {
+      vault = { ...vault, oodDraft: next };
+      draftWrite = saveOODDraft(next);
+      draftWrite.catch((error) => { if (vault?.oodDraft === next && isVaultUnlocked()) context.toast(`OOD count not saved: ${error.message}`); });
+      return draftWrite;
+    },
+  });
+}
 function render() { if (!root) return; if (!vault || !isVaultUnlocked()) return renderLocked(); touch(); if (tab === "history") renderHistory(); else if (tab === "ood") renderOOD(); else renderOverview(); }
 
 function renderOverview() {
@@ -75,7 +90,7 @@ function renderOverview() {
   const archived = active && vault.archives.some((a) => a.id === active.id);
   shell(`<section class="coordHeading"><h1>Your stock desk</h1><p>Weekly department checks, with a record of what you found and what happened next.</p></section><div class="coordMetrics">${[["Saved counts", vault.archives.length], ["Pending observations", summary.pending.length], ["Batches due within 3 months", due.length], ["Repeat shortage patterns", summary.repeatShortages.length]].map(([label, value]) => `<div class="metric">${label}<b>${value}</b></div>`).join("")}</div><div class="coordColumns"><section class="card coordPanel"><div class="eyebrow">Current Cycle Count</div><h2>${e(active?.fileName || "Upload a count to get started")}</h2><p>${active ? `${summarizeProducts(active.products).complete}/${active.products.length} confirmed · Snapshot ${date(active.postingDate)}` : "The normal counting screen stays immediately accessible."}</p>${active ? archived ? '<div class="notice success">This count is already archived. Your original observations are preserved.</div>' : button("archiveCurrent", "Archive current count", "primary") : ""}<p class="small muted">Archive before starting another count. MAX entries are labelled accepted from pre-inventory, rather than physically recounted.</p></section><section class="card coordPanel"><div class="eyebrow">Recorded cost exposure</div><h2>${money(summary.shortageValue)} shortage</h2><p>${money(summary.surplusValue)} surplus · ${summary.unknownCost} observations without usable cost/unit data.</p><p class="small muted">Across saved physical count observations. Repeated observations may describe the same unresolved shortage; these totals are not confirmed new losses. Retail sales value is not included.</p></section></div><section class="card coordPanel"><h2>Department checks</h2><p class="muted">Check expiry dates alongside your weekly count rotation. Imports do not complete an OOD inspection.</p>${checks.length ? `<div class="tableWrap"><table class="previewTable"><thead><tr><th>Department</th><th>Last stock snapshot</th><th>Last import</th><th>Last completed count</th><th>Last OOD check</th><th>Next OOD review</th></tr></thead><tbody>${checks.map(({ department: d, last }) => { const snapshot = summary.departments.find((x) => x.department === d); return `<tr><td>${e(d)}</td><td>${date(snapshot?.lastSnapshot)}</td><td>${date(snapshot?.lastImport)}</td><td>${date(snapshot?.lastCount)}</td><td>${last ? date(last.date) : "Not checked"}</td><td>${last ? `${date(last.nextDate)}${last.nextDate <= today ? " · Due" : ""}` : "Set after checking"}</td></tr>`; }).join("")}</tbody></table></div>` : '<p>No department records yet.</p>'}</section>${summary.repeatShortages.length ? `<section class="card coordPanel"><h2>Repeated unexplained shortages</h2>${summary.repeatShortages.map((r) => `<p><strong>${e(r.product.description)}</strong> · ${r.observations} observations · latest ${n(r.latestVariance)} ${e(r.product.unit || "units unknown")}<br><span class="muted small">${r.dates.map(date).join("; ")}</span></p>`).join("")}<p class="small muted">Review counting errors, PLUs, testers and other explanations. A shortage pattern alone does not identify theft.</p></section>` : ""}<section class="card coordPanel"><h2>Backup & settings</h2><div class="actions coordActions">${button("fullBackup", "Download full backup")}${button("reportDownload", "Download coordinator report")}${button("pinChange", "Change PIN")}${button("shelfSettings", "Shelf-life default")}<label class="upload secondary">Restore full backup<input id="fullRestore" type="file" accept="application/json,.json"></label></div><p class="small muted">Full backups preserve encrypted private records. Download one after finishing a count. Reports contain plaintext private notes; store them carefully. Records are local to this browser, without cloud sync.</p></section>`);
   root.querySelector("#archiveCurrent")?.addEventListener("click", () => archiveActive());
-  root.querySelector("#fullBackup").onclick = () => work(async () => { download(createFullBackup(await loadActiveCount(), await loadEnvelope()), `lush-stock-backup-${today}.json`); context.toast("Full backup downloaded."); });
+  root.querySelector("#fullBackup").onclick = () => work(async () => { await draftWrite; download(createFullBackup(await loadActiveCount(), await loadEnvelope()), `lush-stock-backup-${today}.json`); context.toast("Full backup downloaded."); });
   root.querySelector("#reportDownload").onclick = () => work(async () => {
     if (!window.confirm("This report includes private notes as readable Excel data. Download it?")) return;
     download(exportCoordinatorReport(vault), `lush-stock-report-${today}.xlsx`, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
@@ -136,16 +151,18 @@ function renderOutcome(archive, id) {
   root.querySelector("#linkForm").onsubmit = (event) => { event.preventDefault(); const form = event.currentTarget; const target = targets[Number(form.elements.target.value)]; work(async () => { if (!target) throw new Error("Choose a related discrepancy."); await persist(linkDiscrepancies(vault, [{ archiveId: archive.id, productId: id }, target], form.elements.note.value)); renderOutcome(vault.archives.find((a) => a.id === archive.id), id); context.toast("Records linked. Counts remain unchanged."); }); };
 }
 
-function renderOOD() {
+function renderBatches() {
   const today = assessmentDate || dubaiToday();
   const records = vault.expiryRecords.filter((r) => (department === "ALL" || r.department === department) && (!query.trim() || `${r.plu} ${r.description} ${r.batch || ""}`.toLowerCase().includes(query.trim().toLowerCase()))).filter((r) => { const key = expiryStatus(r, today).key; return risk === "all" || (risk === "risk" ? ["overdue", "today", "30", "60", "3-months"].includes(key) : key === risk); }).sort((a, b) => offShelfDate(a).localeCompare(offShelfDate(b)));
   shell(`<section class="coordHeading"><div class="headerLine"><div><h1>OOD tracker</h1><p>Production date + ${vault.settings?.shelfLifeMonths ?? 7} calendar months by default. Track each batch separately.</p></div><div class="actions">${button("newBatch", "Add batch", "primary")}${button("recordCheck", "Record department check")}</div></div></section><label class="coordField">Check date<input id="oodCheckDate" type="date" value="${e(today)}"></label><div class="tools"><input id="oodSearch" class="search" placeholder="Find expiry batch or PLU" value="${e(query)}"><select id="oodDepartment" class="categorySelect" aria-label="OOD department"><option value="ALL">All departments</option>${departments().map((d) => `<option${department === d ? " selected" : ""}>${e(d)}</option>`).join("")}</select></div><div class="categoryRail">${[["risk", "Next 3 months + overdue"], ["overdue", "Overdue"], ["today", "Off shelf today"], ["30", "Within 30 days"], ["60", "31–60 days"], ["3-months", "Later within 3 months"], ["all", "All batches"], ["closed", "Closed"]].map(([key, label]) => `<button class="chip${risk === key ? " active" : ""}" data-risk="${key}">${label}</button>`).join("")}</div><p class="small muted">Quantities are observations, not live stock balances. Update or close batches after verifying what happened; stock-file changes do not automatically deduct them.</p>${records.length ? records.map((r) => { const status = expiryStatus(r, today); return `<article class="card batchCard ${status.key === "overdue" || status.key === "today" ? "urgent" : ""}"><div class="headerLine"><div><span class="badge">${e(status.label)}</span><h2>${e(r.description || r.plu)}</h2><p class="small muted">PLU ${e(r.plu)} · ${e(r.department)}${r.batch ? ` · Batch ${e(r.batch)}` : ""}${r.location ? ` · ${e(r.location)}` : ""}</p></div><div class="batchDue"><span>Off shelf</span><strong>${date(status.due)}</strong><span>${n(r.quantity)} ${e(r.unit)}</span></div></div><p class="small">Produced ${date(r.productionDate)} · ${r.expiryOverride ? "Explicit expiry / off-shelf date" : `${r.shelfLifeMonths ?? 7}-month rule`} · Last observed ${date(r.observedAt)}${r.status === "closed" ? ` · ${e(r.closureReason)}` : ""}</p><div class="actions coordActions"><button class="secondary" data-edit-batch="${e(r.id)}">Edit / history</button>${r.status !== "closed" ? `<button class="secondary" data-close-batch="${e(r.id)}">Close batch</button>` : ""}</div></article>`; }).join("") : '<section class="card empty">No batches in this view. Record products during the physical expiry check, or choose All batches.</section>'}`);
-  root.querySelector("#oodCheckDate").onchange = (event) => { try { parseDate(event.target.value); assessmentDate = event.target.value; renderOOD(); } catch (error) { root.querySelector("#coordinatorError").textContent = error.message; } };
+  root.querySelector("#coordinatorContent").insertAdjacentHTML("afterbegin", `<div class="actions coordActions oodNav">${button("returnOODCount", "Back to OOD Count")}</div>`);
+  root.querySelector("#returnOODCount").onclick = renderOOD;
+  root.querySelector("#oodCheckDate").onchange = (event) => { try { parseDate(event.target.value); assessmentDate = event.target.value; renderBatches(); } catch (error) { root.querySelector("#coordinatorError").textContent = error.message; } };
   root.querySelector("#newBatch").onclick = () => renderBatch();
   root.querySelector("#recordCheck").onclick = renderCheck;
-  root.querySelector("#oodDepartment").onchange = (event) => { department = event.target.value; renderOOD(); };
-  root.querySelector("#oodSearch").oninput = (event) => { query = event.target.value; renderOOD(); const field = root.querySelector("#oodSearch"); field.focus(); field.setSelectionRange(query.length, query.length); };
-  root.querySelectorAll("[data-risk]").forEach((b) => b.onclick = () => { risk = b.dataset.risk; renderOOD(); });
+  root.querySelector("#oodDepartment").onchange = (event) => { department = event.target.value; renderBatches(); };
+  root.querySelector("#oodSearch").oninput = (event) => { query = event.target.value; renderBatches(); const field = root.querySelector("#oodSearch"); field.focus(); field.setSelectionRange(query.length, query.length); };
+  root.querySelectorAll("[data-risk]").forEach((b) => b.onclick = () => { risk = b.dataset.risk; renderBatches(); });
   root.querySelectorAll("[data-edit-batch]").forEach((b) => b.onclick = () => renderBatch(vault.expiryRecords.find((r) => r.id === b.dataset.editBatch)));
   root.querySelectorAll("[data-close-batch]").forEach((b) => b.onclick = () => renderClose(vault.expiryRecords.find((r) => r.id === b.dataset.closeBatch)));
 }
@@ -157,7 +174,7 @@ function renderBatch(record = {}) {
     available.set(p.plu, matches);
   }
   shell(`<section class="card coordPanel"><div class="headerLine"><h1>${record.id ? "Edit batch" : "Record a production batch"}</h1>${button("backOOD", "Back")}</div><form id="batchForm" class="coordForm">${input("plu", "PLU", record.plu || "", "text", 'required list="knownProducts"')}${input("description", "Product name", record.description || "")}${input("department", "Department", record.department || (department === "ALL" ? "" : department), "text", 'required list="departments"')}${input("productionDate", "Production date", record.productionDate || "", "date", `required max="${dubaiToday()}"`)}${input("quantity", "Quantity in this batch", record.quantity ?? "", "number", 'required min="0.00001" step="any"')}${input("unit", "Unit (PCS, KG…)", record.unit || "", "text", "required")}${input("expiryOverride", "Printed expiry / off-shelf date (optional)", record.expiryOverride || "", "date")}${input("location", "Location (optional)", record.location || "")}${input("batch", "Batch identifier (optional)", record.batch || "")}<p id="productIdentityWarning" class="notice wide" role="status">Choose a PLU; confirm the department and unit for this physical batch.</p><p id="expiryPreview" class="notice wide">Default shelf life: ${record.shelfLifeMonths ?? vault.settings?.shelfLifeMonths ?? 7} calendar months. A printed date overrides it.</p><button class="primary wide">Save batch</button></form>${departmentList()}<datalist id="knownProducts">${[...available.values()].flat().map((p) => `<option value="${e(p.plu)}">${e(p.description)}</option>`).join("")}</datalist>${record.id ? `<h2>Batch history</h2>${record.events.map((event) => `<p class="small">${date(event.at)} · ${e(event.action)} · quantity ${n(event.values?.quantity)} · ${e(event.values?.status || "active")}</p>`).join("")}` : ""}</section>`);
-  root.querySelector("#backOOD").onclick = renderOOD;
+  root.querySelector("#backOOD").onclick = renderBatches;
   const form = root.querySelector("#batchForm");
   form.elements.plu.onchange = () => {
     const matches = available.get(form.elements.plu.value.trim()) || [];
@@ -167,22 +184,22 @@ function renderBatch(record = {}) {
   };
   const preview = () => { try { root.querySelector("#expiryPreview").textContent = `Off shelf ${date(offShelfDate({ productionDate: form.elements.productionDate.value, expiryOverride: form.elements.expiryOverride.value || null, shelfLifeMonths: record.shelfLifeMonths ?? vault.settings?.shelfLifeMonths ?? 7 }))}`; } catch { root.querySelector("#expiryPreview").textContent = "Enter a valid production date to calculate the off-shelf date."; } };
   form.elements.productionDate.onchange = preview; form.elements.expiryOverride.onchange = preview;
-  form.onsubmit = (event) => { event.preventDefault(); const fields = Object.fromEntries(new FormData(form).entries()); work(async () => { await persist(saveExpiryRecord(vault, { ...record, ...fields, plu: fields.plu.trim(), department: fields.department.trim(), quantity: Number(fields.quantity), unit: fields.unit.trim().toUpperCase(), expiryOverride: fields.expiryOverride || null, shelfLifeMonths: record.shelfLifeMonths ?? vault.settings?.shelfLifeMonths ?? 7 })); risk = "all"; query = ""; department = "ALL"; renderOOD(); context.toast("Batch saved."); }); };
+  form.onsubmit = (event) => { event.preventDefault(); const fields = Object.fromEntries(new FormData(form).entries()); work(async () => { await persist(saveExpiryRecord(vault, { ...record, ...fields, plu: fields.plu.trim(), department: fields.department.trim(), quantity: Number(fields.quantity), unit: fields.unit.trim().toUpperCase(), expiryOverride: fields.expiryOverride || null, shelfLifeMonths: record.shelfLifeMonths ?? vault.settings?.shelfLifeMonths ?? 7 })); risk = "all"; query = ""; department = "ALL"; renderBatches(); context.toast("Batch saved."); }); };
 }
 function renderClose(record) {
   shell(`<section class="card coordPanel"><h1>Close ${e(record.description || record.plu)}</h1><p>Keep the original batch and record why it is no longer being monitored.</p><form id="closeBatch" class="coordForm"><label class="coordField">Outcome<select name="reason"><option>Sold</option><option>Wasted</option><option>Transferred</option><option>Corrected</option><option>Other</option></select></label>${input("reference", "Note / reference (optional)")}<button class="primary">Close batch</button>${button("cancelClose", "Cancel")}</form></section>`);
-  root.querySelector("#cancelClose").onclick = renderOOD;
-  root.querySelector("#closeBatch").onsubmit = (event) => { event.preventDefault(); const form = event.currentTarget; work(async () => { await persist(saveExpiryRecord(vault, { ...record, status: "closed", closureReason: `${form.elements.reason.value}${form.elements.reference.value ? `: ${form.elements.reference.value}` : ""}` })); risk = "closed"; renderOOD(); context.toast("Batch closed; history retained."); }); };
+  root.querySelector("#cancelClose").onclick = renderBatches;
+  root.querySelector("#closeBatch").onsubmit = (event) => { event.preventDefault(); const form = event.currentTarget; work(async () => { await persist(saveExpiryRecord(vault, { ...record, status: "closed", closureReason: `${form.elements.reason.value}${form.elements.reference.value ? `: ${form.elements.reference.value}` : ""}` })); risk = "closed"; renderBatches(); context.toast("Batch closed; history retained."); }); };
 }
 function renderCheck() {
   shell(`<section class="card coordPanel"><h1>Record a completed OOD check</h1><p>Use this after physically checking the department, including when no at-risk stock was found.</p><form id="checkForm" class="coordForm">${input("department", "Department checked", department === "ALL" ? "" : department, "text", 'required list="departments"')}${input("date", "Date checked", dubaiToday(), "date", `required max="${dubaiToday()}"`)}${input("nextDate", "Next review date", addDays(dubaiToday(), 7), "date", "required")}<button class="primary">Save completed check</button>${button("cancelCheck", "Cancel")}</form>${departmentList()}</section>`);
-  root.querySelector("#cancelCheck").onclick = renderOOD;
+  root.querySelector("#cancelCheck").onclick = renderBatches;
   root.querySelector("#checkForm").onsubmit = (event) => { event.preventDefault(); const form = event.currentTarget; work(async () => { await persist(recordDepartmentCheck(vault, form.elements.department.value, form.elements.date.value, form.elements.nextDate.value)); tab = "overview"; render(); context.toast("Department check saved."); }); };
 }
 function renderPinChange() {
   shell(`<section class="card coordPanel"><h1>Change coordinator PIN</h1><form id="changePinForm" class="coordForm">${input("old", "Current PIN", "", "password", 'inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required autocomplete="off"')}${input("next", "New four-digit PIN", "", "password", 'inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required autocomplete="off"')}${input("repeat", "Repeat new PIN", "", "password", 'inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required autocomplete="off"')}<button class="primary">Change PIN</button>${button("cancelSettings", "Cancel")}</form><p class="small muted">Your records will be re-encrypted. Existing backups continue to use the PIN they were created with.</p></section>`);
   root.querySelector("#cancelSettings").onclick = render;
-  root.querySelector("#changePinForm").onsubmit = (event) => { event.preventDefault(); const form = event.currentTarget; const old = form.elements.old.value, next = form.elements.next.value, repeat = form.elements.repeat.value; form.reset(); work(async () => { if (next !== repeat) throw new Error("New PINs do not match."); vault = await changePin(old, next); render(); context.toast("PIN changed. Download a new backup."); }); };
+  root.querySelector("#changePinForm").onsubmit = (event) => { event.preventDefault(); const form = event.currentTarget; const old = form.elements.old.value, next = form.elements.next.value, repeat = form.elements.repeat.value; form.reset(); work(async () => { if (next !== repeat) throw new Error("New PINs do not match."); await draftWrite; vault = await changePin(old, next); draftWrite = Promise.resolve(); render(); context.toast("PIN changed. Download a new backup."); }); };
 }
 function renderShelfSettings() {
   shell(`<section class="card coordPanel"><h1>Default off-shelf age</h1><p>This applies to new batch records. Existing batches retain their original rule or printed-date override.</p><form id="shelfForm">${input("months", "Calendar months from production", vault.settings?.shelfLifeMonths ?? 7, "number", 'required min="1" max="120" step="1"')}<div class="actions coordActions"><button class="primary">Save default</button>${button("cancelSettings", "Cancel")}</div></form></section>`);
@@ -193,5 +210,5 @@ async function restoreFull(file) {
   if (!file) return;
   shell(`<section class="card coordPanel"><h1>Restore full backup</h1><p>Validation happens before anything is replaced. Enter the PIN used when this backup was created.</p><form id="restoreForm">${input("pin", "Backup PIN", "", "password", 'inputmode="numeric" pattern="[0-9]{4}" required maxlength="4" autocomplete="off"')}<div class="actions coordActions"><button class="primary">Validate backup</button>${button("cancelRestore", "Cancel")}</div></form></section>`);
   root.querySelector("#cancelRestore").onclick = render;
-  root.querySelector("#restoreForm").onsubmit = (event) => { event.preventDefault(); const pin = event.currentTarget.elements.pin.value; event.currentTarget.reset(); work(async () => { const verified = await validateFullBackup(await file.text(), pin); if (!window.confirm("Download a backup of current data before replacing it?")) return; download(createFullBackup(await loadActiveCount(), await loadEnvelope()), `lush-before-restore-${dubaiToday()}.json`); if (!window.confirm("Replace the current count and all coordinator records with this validated backup?")) return; await replaceFullState(verified); await context.onRestored?.(); lockCoordinator(); context.toast("Full backup restored. Unlock using its PIN."); }); };
+  root.querySelector("#restoreForm").onsubmit = (event) => { event.preventDefault(); const pin = event.currentTarget.elements.pin.value; event.currentTarget.reset(); work(async () => { const verified = await validateFullBackup(await file.text(), pin); await draftWrite; if (!isVaultUnlocked()) return; if (!window.confirm("Download a backup of current data before replacing it?")) return; download(createFullBackup(await loadActiveCount(), await loadEnvelope()), `lush-before-restore-${dubaiToday()}.json`); if (!window.confirm("Replace the current count and all coordinator records with this validated backup?")) return; await replaceFullState(verified); await context.onRestored?.(); lockCoordinator(); context.toast("Full backup restored. Unlock using its PIN."); }); };
 }

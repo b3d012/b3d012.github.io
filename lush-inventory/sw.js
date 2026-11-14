@@ -1,4 +1,4 @@
-const CACHE = "lush-inventory-v2.1";
+const CACHE = "lush-inventory-v2.2";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -12,6 +12,8 @@ const APP_SHELL = [
   "./src/coordinator-store.js",
   "./src/history-model.js",
   "./src/expiry-model.js",
+  "./src/ood-count.js",
+  "./src/ood-ui.js",
   "./src/full-backup.js",
   "./src/pin-config.js",
   "./vendor/xlsx.full.min.js",

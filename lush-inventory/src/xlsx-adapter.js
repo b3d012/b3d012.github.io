@@ -1,5 +1,6 @@
 import { productTotals } from "./count-model.js";
 import { offShelfDate } from "./expiry-model.js";
+import { OOD_BUCKETS, oodBucketValue, oodTotals, oodWindows } from "./ood-count.js";
 
 const REQUIRED = [
   { key: "category", label: "Category", aliases: ["category"] },
@@ -165,6 +166,44 @@ export function exportInventory(count) {
   worksheet["!autofilter"] = { ref: worksheet["!ref"] };
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, "Store Inventory Journal");
+  return XLSX.write(workbook, { type: "array", bookType: "xlsx", compression: true });
+}
+
+export function exportOODCount(count) {
+  const XLSX = lib(), workbook = XLSX.utils.book_new();
+  const headers = ["Category", "Item No.(PLU)", "Description", "Unit", "On Hand Qty.", ...OOD_BUCKETS.map(([, label]) => label), "Counted", "Variance"];
+  const rows = [headers, ...count.products.map((p) => {
+    const { complete, total, variance } = oodTotals(p);
+    return [p.category, p.plu, p.description, p.unit || "", p.onHand,
+      ...OOD_BUCKETS.map(([key]) => oodBucketValue(p, key, complete) ?? ""),
+      total ?? "", complete ? -variance : ""];
+  })];
+  const sheet = XLSX.utils.aoa_to_sheet(rows);
+  sheet["!cols"] = [17, 17, 34, 8, 12, 11, 12, 12, 12, 15, 10, 11].map((wch) => ({ wch }));
+  sheet["!rows"] = [{ hpt: 33 }, ...rows.slice(1).map(() => ({ hpt: 27 }))];
+  sheet["!autofilter"] = { ref: sheet["!ref"] };
+  for (let r = 0; r < rows.length; r++) for (let c = 0; c < headers.length; c++) {
+    const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+    cell.s = {
+      font: { name: "Arial", sz: 10, bold: r === 0 || c === 11, color: { rgb: r === 0 ? "FFFFFF" : "111111" } },
+      fill: { patternType: "solid", fgColor: { rgb: r === 0 ? "555555" : r % 2 ? "D9EEF6" : "FFFFFF" } },
+      border: Object.fromEntries(["top", "bottom", "left", "right"].map((side) => [side, { style: "thin", color: { rgb: "BBBBBB" } }])),
+      alignment: { vertical: "center", wrapText: true, horizontal: c >= 4 ? "center" : "left" },
+      numFmt: c >= 4 && r ? "#,##0.#####" : "@",
+    };
+  }
+  XLSX.utils.book_append_sheet(workbook, sheet, "OOD Count");
+  const [, first, second, third] = oodWindows(count.checkedOn);
+  const info = XLSX.utils.aoa_to_sheet([
+    ["Checked on", count.checkedOn], ["Source file", count.fileName], ["Source posting date", count.postingDate || "Unknown"],
+    ["Default months from production", count.shelfLifeMonths], ["Already OOD", `Off-shelf date through ${count.checkedOn}, including today`],
+    ["1 Month to OOD", `After check date through ${first}`], ["2 Months to OOD", `After ${first} through ${second}`],
+    ["3 Months to OOD", `After ${second} through ${third}`], ["More than 3 Months to OOD", `After ${third}`],
+    ["Variance", "On Hand minus Counted. Positive is a shortage; negative is extra stock."],
+    ["Unfinished rows", "Entered valid quantities are shown. Unknown quantities, total and variance are blank."],
+  ]);
+  info["!cols"] = [{ wch: 36 }, { wch: 80 }];
+  XLSX.utils.book_append_sheet(workbook, info, "Count Details");
   return XLSX.write(workbook, { type: "array", bookType: "xlsx", compression: true });
 }
 
