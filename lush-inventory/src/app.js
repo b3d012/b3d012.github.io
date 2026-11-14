@@ -37,7 +37,7 @@ function downloadText(text, name, type) {
 }
 
 function topbar() {
-  return `<div class="topbar"><div class="brand">Lush Inventory <span class="version">2.0</span></div><div class="actions"><button id="coordinator" class="secondary">Coordinator</button><button id="installApp" class="secondary install${installPrompt ? " show" : ""}">Install app</button></div></div>`;
+  return `<div class="topbar"><div class="brand">Lush Inventory <span class="version">2.1</span></div><div class="actions"><button id="coordinator" class="secondary">Coordinator</button><button id="installApp" class="secondary install${installPrompt ? " show" : ""}">Install app</button></div></div>`;
 }
 
 function openCoordinator() {

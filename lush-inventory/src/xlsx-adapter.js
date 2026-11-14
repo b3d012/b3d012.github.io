@@ -8,7 +8,7 @@ const REQUIRED = [
   { key: "onHand", label: "On Hand Qty.", aliases: ["onhandqty"] },
 ];
 
-export const OUTPUT_HEADERS = ["Category", "Item No.(PLU)", "Description", "On Hand Qty.", "Display", "Cupboard", "Store Room"];
+export const OUTPUT_HEADERS = ["Category", "Item No.(PLU)", "Description", "On Hand Qty.", "Display", "Cupboard", "Store Room", "Variance"];
 
 export function normalizeHeader(text) {
   return String(text ?? "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -122,15 +122,19 @@ function exportValue(raw) {
 
 export function exportInventory(count) {
   const XLSX = lib();
-  const rows = [OUTPUT_HEADERS, ...count.products.map((product) => [
-    product.category,
-    product.plu,
-    product.description,
-    Number(product.onHand),
-    product.confirmed === false ? "" : exportValue(product.display),
-    product.confirmed === false ? "" : exportValue(product.cupboard),
-    product.confirmed === false ? "" : exportValue(product.storeRoom),
-  ])];
+  const rows = [OUTPUT_HEADERS, ...count.products.map((product) => {
+    const { complete, countedTotal } = productTotals(product);
+    return [
+      product.category,
+      product.plu,
+      product.description,
+      Number(product.onHand),
+      product.confirmed === false ? "" : exportValue(product.display),
+      product.confirmed === false ? "" : exportValue(product.cupboard),
+      product.confirmed === false ? "" : exportValue(product.storeRoom),
+      complete ? Number(product.onHand) - countedTotal : "",
+    ];
+  })];
   const worksheet = XLSX.utils.aoa_to_sheet(rows);
   const border = {
     top: { style: "thin", color: { rgb: "555555" } },
@@ -156,9 +160,9 @@ export function exportInventory(count) {
       };
     }
   }
-  worksheet["!cols"] = [{ wch: 22 }, { wch: 18 }, { wch: 52 }, { wch: 15 }, { wch: 13 }, { wch: 13 }, { wch: 14 }];
+  worksheet["!cols"] = [{ wch: 22 }, { wch: 18 }, { wch: 52 }, { wch: 15 }, { wch: 13 }, { wch: 13 }, { wch: 14 }, { wch: 13 }];
   worksheet["!rows"] = [{ hpt: 24 }, ...Array.from({ length: rows.length - 1 }, () => ({ hpt: 21 }))];
-  worksheet["!autofilter"] = { ref: `A1:G${rows.length}` };
+  worksheet["!autofilter"] = { ref: worksheet["!ref"] };
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, "Store Inventory Journal");
   return XLSX.write(workbook, { type: "array", bookType: "xlsx", compression: true });

@@ -86,20 +86,27 @@ test("preserves identifier text including leading zeroes", () => {
   assert.deepEqual(count.products.map((p) => p.plu), ["000123", "90071992547409931234"]);
 });
 
-test("exports exact seven-column order while preserving blank and zero", async () => {
+test("appends printable variance as on hand minus counted, leaving unfinished rows blank", async () => {
   globalThis.XLSX = StyleXLSX;
   const count = importInventory(await fs.readFile(fixture), "PreChanges.xlsx");
   count.products[0].display = "0";
   count.products[0].cupboard = "1.5";
   count.products[0].storeRoom = "-1";
   count.products[0].confirmed = true;
+  Object.assign(count.products[2], { display: "3", cupboard: "2", storeRoom: "1", confirmed: true });
+  Object.assign(count.products[3], { display: "6", confirmed: true });
+  Object.assign(count.products[4], { display: "", confirmed: true });
   const bytes = exportInventory(count);
   const wb = XLSX.read(bytes, { type: "array", raw: true });
   assert.deepEqual(wb.SheetNames, ["Store Inventory Journal"]);
   const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null });
-  assert.deepEqual(rows[0], ["Category", "Item No.(PLU)", "Description", "On Hand Qty.", "Display", "Cupboard", "Store Room"]);
-  assert.deepEqual(rows[1].slice(3), [8, 0, 1.5, -1]);
-  assert.deepEqual(rows[2].slice(4), ["", "", ""]);
+  assert.deepEqual(rows[0], ["Category", "Item No.(PLU)", "Description", "On Hand Qty.", "Display", "Cupboard", "Store Room", "Variance"]);
+  assert.deepEqual(rows[1].slice(3), [8, 0, 1.5, -1, 7.5]);
+  assert.deepEqual(rows[2].slice(4), ["", "", "", ""]);
+  assert.equal(rows[3][7], -1);
+  assert.equal(rows[4][7], 0);
+  assert.equal(rows[5][7], "");
+  assert.match(wb.Sheets[wb.SheetNames[0]]["!autofilter"].ref, /^A1:H/);
   globalThis.XLSX = XLSX;
 });
 
