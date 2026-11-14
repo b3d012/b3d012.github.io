@@ -67,9 +67,14 @@ export function oodTotals(product) {
 }
 
 export function archiveOODCount(vault, archivedAt = new Date().toISOString()) {
-  if (!vault.oodDraft?.products.some((p) => OOD_BUCKETS.some(([key]) => oodBucketValue(p, key, oodTotals(p).complete) !== null))) throw new Error("Enter at least one valid quantity before saving to history.");
-  const saved = structuredClone({ ...vault.oodDraft, countMode: "ood", archivedAt });
-  return { ...vault, oodDraft: null, oodCounts: [saved, ...(vault.oodCounts || [])] };
+  return { ...archiveOODSnapshot(vault, vault.oodDraft, archivedAt), oodDraft: null };
+}
+
+export function archiveOODSnapshot(vault, count, archivedAt = new Date().toISOString()) {
+  if (!count?.products.some((p) => OOD_BUCKETS.some(([key]) => oodBucketValue(p, key, oodTotals(p).complete) !== null))) throw new Error("Enter at least one valid quantity before saving to history.");
+  if (vault.oodCounts?.some((saved) => saved.id === count.id)) return vault;
+  const saved = structuredClone({ ...count, countMode: "ood", archivedAt });
+  return { ...vault, oodCounts: [saved, ...(vault.oodCounts || [])] };
 }
 
 export function validateOODRecords(vault) {

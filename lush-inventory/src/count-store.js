@@ -1,4 +1,5 @@
 import { validateCountNaming } from "./count-naming.js";
+import { oodProductionRanges, validateOODRecords } from "./ood-count.js";
 
 const DB_NAME = "lush-inventory-counter";
 const STORE_NAME = "counts";
@@ -48,14 +49,39 @@ export async function loadActiveCount() {
   return transact("readonly", (store) => store.get(ACTIVE_KEY));
 }
 
-export async function saveActiveCount(count) {
+export async function saveActiveCount(count, expectedActive) {
   const copy = structuredClone(count);
-  await writeRecords([{ store: STORE_NAME, key: ACTIVE_KEY, value: copy }]);
+  await writeRecords([{ store: STORE_NAME, key: ACTIVE_KEY, value: copy, ...(expectedActive === undefined ? {} : { expectedActive }) }]);
   return copy;
 }
 
-export async function clearActiveCount() {
-  await writeRecords([{ store: STORE_NAME, key: ACTIVE_KEY, value: null }]);
+export function validateActiveCount(count) {
+  if (count?.countMode !== "ood") return validateCountBackup(count);
+  if (count.archivedAt != null) validateOODRecords({ oodCounts: [count] });
+  else validateOODRecords({ oodDraft: count });
+  oodProductionRanges(count.checkedOn, count.shelfLifeMonths);
+  if (count.events != null) validateEvents(count.events);
+  return count;
+}
+
+export async function clearActiveCount(expectedActive) {
+  await writeRecords([{ store: STORE_NAME, key: ACTIVE_KEY, value: null, ...(expectedActive === undefined ? {} : { expectedActive }) }]);
+}
+
+export async function loadOODDefault() {
+  const months = await readRecord(STORE_NAME, "oodShelfDefault");
+  return Number.isInteger(months) && months >= 1 && months <= 120 ? months : 7;
+}
+
+export async function readBackupState() {
+  const db = await database();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([STORE_NAME, "coordinator"], "readonly");
+    const active = tx.objectStore(STORE_NAME).get(ACTIVE_KEY);
+    const vault = tx.objectStore("coordinator").get("vault");
+    tx.oncomplete = () => resolve([active.result ?? null, vault.result ?? null]);
+    tx.onabort = () => reject(tx.error || new Error("Could not read backup data."));
+  });
 }
 
 export function validateCountBackup(value) {
@@ -120,11 +146,14 @@ export function writeRecords(records) {
       transaction.onabort = () => reject(conflict || transaction.error || new Error("Save cancelled. Existing data was preserved."));
       try { for (const entry of copies) {
         const store = transaction.objectStore(entry.store);
-        if (Object.hasOwn(entry, "expectedCiphertext")) {
+        if (Object.hasOwn(entry, "expectedCiphertext") || Object.hasOwn(entry, "expectedActive")) {
           const request = store.get(entry.key);
           request.onsuccess = () => {
-            if ((request.result?.ciphertext ?? null) !== entry.expectedCiphertext) { conflict = new Error("Records changed in another tab. Lock and unlock to load the latest records before saving."); transaction.abort(); }
-            else { try { store.put(entry.value, entry.key); } catch (error) { conflict = error; transaction.abort(); } }
+            const stale = Object.hasOwn(entry, "expectedActive")
+              ? JSON.stringify(request.result ?? null) !== JSON.stringify(entry.expectedActive)
+              : (request.result?.ciphertext ?? null) !== entry.expectedCiphertext;
+            if (stale) { conflict = new Error("Saved records changed. Reopen the app to load the latest count before saving."); transaction.abort(); }
+            else if (!entry.checkOnly) { try { if (entry.value === null) store.delete(entry.key); else store.put(entry.value, entry.key); } catch (error) { conflict = error; transaction.abort(); } }
           };
         } else if (entry.value === null) store.delete(entry.key);
         else store.put(entry.value, entry.key);
@@ -136,7 +165,7 @@ export function writeRecords(records) {
 }
 
 export function createBackup(count) {
-  validateCountBackup(count);
+  validateActiveCount(count);
   return JSON.stringify({ ...count, updatedAt: count.updatedAt || new Date().toISOString() }, null, 2);
 }
 
@@ -147,7 +176,7 @@ export async function restoreBackup(json) {
   } catch {
     throw new Error("This backup is not valid JSON.");
   }
-  validateCountBackup(parsed);
+  validateActiveCount(parsed);
   await saveActiveCount(parsed);
   return parsed;
 }

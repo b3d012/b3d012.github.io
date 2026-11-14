@@ -47,6 +47,7 @@ export function confirmZero(product, now) {
 
 export function migrateCount(count) {
   if (!count) return null;
+  if (count.countMode === "ood") return structuredClone(count);
   const next = structuredClone(count);
   next.schemaVersion = 2;
   next.id ||= crypto.randomUUID();

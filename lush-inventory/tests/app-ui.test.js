@@ -72,11 +72,12 @@ test("import preview requires a mode and saves a named Pre Inventory", async (t)
   assert.equal(saved.fileName, "Journal.xlsx");
 });
 
-test("the shared upload starts OOD after the picker backgrounds the app, without replacing a regular count", async (t) => {
+test("staff can start OOD without a PIN, cancel or confirm replacement, and resume the single active count", async (t) => {
   const dom = new JSDOM('<div id="app"></div><div id="toast"></div>', { url: "https://example.test/lush-inventory/", pretendToBeVisual: true });
   globalThis.window = dom.window; globalThis.document = dom.window.document; globalThis.XLSX = XLSX;
   Object.defineProperty(globalThis, "navigator", { configurable: true, value: dom.window.navigator });
   window.confirm = () => true;
+  globalThis.confirm = (message) => window.confirm(message);
   t.after(() => { lockCoordinator(); dom.window.close(); });
   await import("../src/app.js?ood-mode-test");
   const before = await loadActiveCount();
@@ -95,12 +96,29 @@ test("the shared upload starts OOD after the picker backgrounds the app, without
   const mode = await until("#countMode");
   assert.ok([...mode.options].some((option) => option.value === "ood"));
   mode.value = "ood"; mode.dispatchEvent(new window.Event("change"));
+  let prompt;
+  window.confirm = (message) => { prompt = message; return false; };
   document.querySelector("#confirmImport").click();
-  const pin = await until('[name="pin"]');
-  pin.value = process.env.LUSH_TEST_PIN;
-  pin.form.dispatchEvent(new window.Event("submit", { cancelable: true }));
+  assert.match(prompt, /Pre_Inventory/);
+  assert.deepEqual(await loadActiveCount(), before);
+  window.confirm = () => true;
+  const anchorClick = window.HTMLAnchorElement.prototype.click;
+  window.HTMLAnchorElement.prototype.click = () => {};
+  t.after(() => { window.HTMLAnchorElement.prototype.click = anchorClick; });
+  document.querySelector("#backupBeforeReplace").click();
+  document.querySelector("#confirmImport").click();
   await until("[data-bucket]");
   assert.equal(document.querySelector("#oodAreas").value, "Haircare and Gifts");
   assert.equal(document.querySelector("#oodUpload"), null);
-  assert.deepEqual(await loadActiveCount(), before);
+  assert.equal(document.querySelector('[name="pin"]'), null);
+  const field = document.querySelector('[data-bucket="later"]');
+  field.value = "6"; field.dispatchEvent(new window.Event("input", { bubbles: true }));
+  document.querySelector("#reviewOOD").click();
+  assert.ok(document.querySelector("#exportOOD"));
+  document.querySelector("#exportOOD").click();
+  document.querySelector("#oodHome").click();
+  assert.equal(document.querySelector("#resumeOOD"), null);
+  assert.equal((await loadActiveCount()).countMode, "ood");
+  document.querySelector("#continueCount").click();
+  assert.equal(document.querySelector('[data-bucket="later"]').value, "6");
 });

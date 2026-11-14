@@ -1,9 +1,12 @@
 import { summarizeProducts, productStatus, productTotals, parseCountValue, applyMax, confirmZero, migrateCount, prepareCountEdit } from "./count-model.js";
 import { filterProducts, filterReviewProducts, updateProductField } from "./app-logic.js";
 import { importInventory, downloadWorkbook } from "./xlsx-adapter.js";
-import { loadActiveCount, saveActiveCount, clearActiveCount, createBackup, restoreBackup } from "./count-store.js";
+import { loadActiveCount, saveActiveCount, clearActiveCount, createBackup, validateActiveCount, loadOODDefault } from "./count-store.js";
 import { mountCoordinator } from "./coordinator-ui.js";
 import { REGULAR_MODES, countAreas, countModeLabel, countTitle, startRegularCount } from "./count-naming.js";
+import { createOODCount, oodTotals } from "./ood-count.js";
+import { renderOODCounts } from "./ood-ui.js";
+import { dubaiToday } from "./expiry-model.js";
 
 const root = document.getElementById("app");
 const toastNode = document.getElementById("toast");
@@ -16,6 +19,25 @@ let reviewFilter = "all";
 let installPrompt = null;
 let replacementReady = false;
 let saveError = false;
+let storedCount = null;
+let activeWrite = Promise.resolve();
+
+function holdControls() {
+  const controls = [...root.querySelectorAll("button:not(:disabled), input:not(:disabled), select:not(:disabled)")];
+  controls.forEach((control) => { control.disabled = true; });
+  return () => controls.forEach((control) => { control.disabled = false; });
+}
+
+function writeActive(count) {
+  const snapshot = count ? structuredClone(validateActiveCount(count)) : null;
+  const write = activeWrite.then(async () => {
+    if (snapshot) await saveActiveCount(snapshot, storedCount);
+    else await clearActiveCount(storedCount);
+    storedCount = snapshot;
+  });
+  activeWrite = write.catch(() => {});
+  return write;
+}
 
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
 const formatNumber = (value) => value === null || value === undefined ? "—" : new Intl.NumberFormat("en-US", { maximumFractionDigits: 5 }).format(value);
@@ -38,13 +60,37 @@ function downloadText(text, name, type) {
 }
 
 function topbar() {
-  return `<div class="topbar"><div class="brand">Lush Inventory <span class="version">2.5</span></div><div class="actions"><button id="coordinator" class="secondary">Coordinator</button><button id="installApp" class="secondary install${installPrompt ? " show" : ""}">Install app</button></div></div>`;
+  return `<div class="topbar"><div class="brand">Lush Inventory <span class="version">2.6</span></div><div class="actions"><button id="coordinator" class="secondary">Coordinator</button><button id="installApp" class="secondary install${installPrompt ? " show" : ""}">Install app</button></div></div>`;
 }
 
-function openCoordinator(ood = false, source = null) {
+function openCoordinator() {
   view = "coordinator";
-  mountCoordinator(root, { getActiveCount: () => activeCount, saveActiveCount: async (count) => { activeCount = count; }, onExit: () => pendingCount ? renderPreview() : renderHome(), onArchived: () => { replacementReady = true; }, onRestored: async () => { activeCount = migrateCount(await loadActiveCount()); pendingCount = null; replacementReady = false; }, toast,
-    openOOD: ood === true, oodSource: source, onOODStarted: () => { pendingCount = null; replacementReady = false; } });
+  const readActive = async () => { storedCount = await loadActiveCount(); activeCount = migrateCount(storedCount); saveError = false; };
+  mountCoordinator(root, { getActiveCount: () => activeCount, saveActiveCount: (count) => { storedCount = structuredClone(count); activeCount = count; saveError = false; },
+    expectedActive: () => storedCount,
+    beforeArchive: () => activeWrite,
+    onActiveCommittedWhileLocked: readActive,
+    onExit: () => pendingCount ? renderPreview() : renderHome(), onArchived: () => { replacementReady = true; }, onRestored: async () => { await readActive(); pendingCount = null; replacementReady = false; }, toast,
+  });
+}
+
+function renderPublicOOD(page = "entry") {
+  view = "count";
+  renderOODCounts({
+    root, shell: (content) => { root.innerHTML = topbar() + content; bindCommon(); },
+    e: escapeHtml, n: formatNumber, date: (value) => new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeZone: "Asia/Dubai" }).format(new Date(value + "T12:00:00Z")),
+    button: (id, label, style = "secondary") => `<button type="button" id="${id}" class="${style}">${label}</button>`,
+    getCount: () => activeCount, onHome: renderHome, onArchive: openCoordinator,
+    download: downloadText, toast,
+    async work(action) { try { await action(); } catch (error) { toast(error.message); } },
+    autosave(next) {
+      const edited = { ...prepareCountEdit(next), updatedAt: new Date().toISOString() };
+      activeCount = edited;
+      return writeActive(edited).then(() => {
+        if (activeCount === edited) saveError = false;
+      }, (error) => { if (activeCount === edited) saveError = true; throw error; });
+    },
+  }, page);
 }
 
 function fileUpload(label = "Upload weekly inventory file", className = "primary") {
@@ -56,11 +102,12 @@ function renderHome() {
   if (!activeCount) {
     root.innerHTML = `${topbar()}<section class="card hero"><div class="eyebrow">Weekly stock count</div><h1>Weekly inventory, without the paperwork.</h1><p>Upload the original Excel export. The app prepares the counting list automatically and keeps everything saved on this tablet.</p><div class="actions">${fileUpload()}<label class="upload secondary">Restore backup<input id="backupUpload" type="file" accept="application/json,.json"></label></div></section>`;
   } else {
-    const summary = summarizeProducts(activeCount.products);
+    const summary = activeCount.countMode === "ood" ? (() => {
+      const total = activeCount.products.length, complete = activeCount.products.filter((p) => oodTotals(p).complete).length;
+      return { total, complete, percent: Math.round(complete * 100 / total) };
+    })() : summarizeProducts(activeCount.products);
     root.innerHTML = `${topbar()}<section class="card savedCard"><div class="eyebrow">Current count</div><h1>${escapeHtml(countTitle(activeCount))}</h1><p class="productMeta">Imported ${escapeHtml(new Date(activeCount.importedAt).toLocaleString())}</p><div class="savedMeta"><div class="metric">Products<b>${summary.total}</b></div><div class="metric">Completed<b>${summary.complete}</b></div><div class="metric">Progress<b>${summary.percent}%</b></div></div><div class="actions"><button id="continueCount" class="primary">Continue current count</button>${fileUpload("Start new count", "secondary")}<button id="downloadBackup" class="secondary">Download backup</button><label class="upload secondary">Restore backup<input id="backupUpload" type="file" accept="application/json,.json"></label><button id="clearCount" class="danger">Delete current count</button></div></section>`;
   }
-  root.querySelector(".actions:last-child").insertAdjacentHTML("beforeend", '<button id="resumeOOD" class="secondary">Resume OOD Count</button>');
-  root.querySelector("#resumeOOD").onclick = () => openCoordinator(true);
   bindCommon();
 }
 
@@ -79,11 +126,9 @@ function renderPreview() {
   mode.value = pendingCount.countMode || "";
   const syncMode = () => {
     start.disabled = !mode.value;
-    const replacing = root.querySelector("#replaceRegular");
-    if (replacing) replacing.hidden = mode.value === "ood" || !mode.value;
-    root.querySelector("#importHint").textContent = mode.value === "ood"
-      ? "Unlock to start the OOD Count. Your regular count stays saved."
-      : "Your current saved count will not be replaced until you press Start counting.";
+    root.querySelector("#importHint").textContent = activeCount
+      ? "Only one count can be active. You can keep the current one or replace it."
+      : "Choose the type of count to start.";
   };
   syncMode();
   mode.onchange = () => { pendingCount.countMode = mode.value; syncMode(); };
@@ -94,13 +139,18 @@ function renderPreview() {
   if (backupButton) backupButton.onclick = () => { downloadText(createBackup(activeCount), `lush-count-before-replace.json`, "application/json"); replacementReady = true; toast("Current count backup downloaded."); };
   document.getElementById("cancelPreview").onclick = () => { pendingCount = null; renderHome(); };
   document.getElementById("confirmImport").onclick = async () => {
-    if (mode.value === "ood") { pendingCount.areaLabel = areas.value; openCoordinator(true, pendingCount); return; }
-    if (activeCount && !replacementReady) { alert("Archive your current count or download its backup before starting the new one."); return; }
-    if (activeCount && !confirm(`Start ${pendingCount.fileName} and replace the active counting screen? Archived coordinator records remain saved.`)) return;
-    const next = startRegularCount(pendingCount, mode.value, areas.value);
-    start.disabled = true;
-    try { await saveActiveCount(next); } catch (error) { start.disabled = false; alert(error.message); return; }
+    if (activeCount && !confirm(`Replace the current count: ${countTitle(activeCount)}?${replacementReady && !saveError ? "" : " The current count has not been archived or backed up. Choose Cancel to keep it."}`)) return;
+    const release = holdControls();
+    let next;
+    try {
+      next = mode.value === "ood"
+        ? createOODCount({ ...pendingCount, areaLabel: areas.value }, dubaiToday(), await loadOODDefault())
+        : startRegularCount(pendingCount, mode.value, areas.value);
+      if (!start.isConnected) return;
+      await writeActive(next);
+    } catch (error) { release(); alert(error.message); return; }
     activeCount = next; pendingCount = null; replacementReady = false;
+    saveError = false;
     category = "ALL";
     query = "";
     renderCount();
@@ -122,6 +172,7 @@ function productMarkup(product) {
 }
 
 function renderCount() {
+  if (activeCount.countMode === "ood") return renderPublicOOD();
   view = "count";
   const summary = summarizeProducts(activeCount.products);
   const filtered = filterProducts(activeCount.products, category, query);
@@ -164,7 +215,7 @@ function bindCount() {
           if (parseCountValue(input.value).kind === "invalid") input.setAttribute("aria-invalid", "true"); else input.removeAttribute("aria-invalid");
           activeCount.updatedAt = new Date().toISOString();
           refreshProductCard(card.dataset.id);
-          await saveActiveCount(activeCount);
+          await writeActive(activeCount);
           saveError = false;
           toast("Saved");
         } catch (error) {
@@ -180,7 +231,7 @@ function bindCount() {
       const product = activeCount.products.find((p) => p.id === card.dataset.id);
       card.querySelectorAll("input[data-field]").forEach((input) => { input.value = product[input.dataset.field]; input.removeAttribute("aria-invalid"); });
       refreshProductCard(card.dataset.id);
-      try { await saveActiveCount(activeCount); saveError = false; toast("Saved"); } catch (error) { saveError = true; toast(`Not saved: ${error.message}. Download a backup.`); }
+      try { await writeActive(activeCount); saveError = false; toast("Saved"); } catch (error) { saveError = true; toast(`Not saved: ${error.message}. Download a backup.`); }
     };
     const max = card.querySelector("[data-max]");
     if (max) max.onclick = () => applyAction(applyMax);
@@ -229,19 +280,23 @@ async function handleXlsx(file, picker) {
   }
 }
 
-async function handleBackup(file) {
+async function handleBackup(file, picker) {
   if (!file) return;
+  const release = holdControls();
   try {
     const text = await file.text();
     const parsed = JSON.parse(text);
-    if (activeCount && !confirm(`Replace ${activeCount.fileName} with the selected backup?`)) return;
-    activeCount = migrateCount(await restoreBackup(JSON.stringify(parsed)));
-    await saveActiveCount(activeCount);
+    if (activeCount && !confirm(`Replace ${countTitle(activeCount)} with the selected backup?`)) return;
+    const previous = migrateCount(validateActiveCount(parsed));
+    // Standalone backups can predate an archive of the same count.
+    const restored = { ...previous, id: crypto.randomUUID(), supersedesId: previous.id, archivedAt: null };
+    await writeActive(restored);
+    activeCount = restored; saveError = false;
     renderHome();
     toast("Backup restored.");
   } catch (error) {
     alert(error.message || "The backup could not be restored.");
-  }
+  } finally { release(); picker.value = ""; }
 }
 
 function bindCommon() {
@@ -250,7 +305,7 @@ function bindCommon() {
   const xlsx = document.getElementById("xlsxUpload");
   if (xlsx) xlsx.onchange = () => handleXlsx(xlsx.files[0], xlsx);
   const backup = document.getElementById("backupUpload");
-  if (backup) backup.onchange = (event) => handleBackup(event.target.files[0]);
+  if (backup) backup.onchange = () => handleBackup(backup.files[0], backup);
   const install = document.getElementById("installApp");
   if (install) install.onclick = async () => {
     if (!installPrompt) return;
@@ -268,9 +323,11 @@ function bindCommon() {
   };
   const clearButton = document.getElementById("clearCount");
   if (clearButton) clearButton.onclick = async () => {
-    if (!confirm(`Delete the saved count for ${activeCount.fileName}? Download a backup first if you need it.`)) return;
-    try { await clearActiveCount(); activeCount = null; renderHome(); }
+    if (!confirm(`Delete the saved count for ${countTitle(activeCount)}? Download a backup first if you need it.`)) return;
+    const release = holdControls();
+    try { await writeActive(null); activeCount = null; renderHome(); }
     catch (error) { toast(`Count was not deleted: ${error.message}`); }
+    finally { release(); }
   };
 }
 
@@ -285,8 +342,9 @@ if ("serviceWorker" in navigator) window.addEventListener("load", () => navigato
 
 try {
   const stored = await loadActiveCount();
+  storedCount = stored;
   activeCount = migrateCount(stored);
-  if (stored && stored.schemaVersion === 1) await saveActiveCount(activeCount);
+  if (stored && stored.schemaVersion === 1) await writeActive(activeCount);
   renderHome();
 } catch (error) {
   root.innerHTML = `<section class="card coordPanel"><h1>Saved data could not be opened</h1><p>${escapeHtml(error.message)}</p><p>Keep your existing browser data. Reload to try again; do not clear storage or uninstall the app.</p></section>`;

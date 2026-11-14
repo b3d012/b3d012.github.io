@@ -1,4 +1,4 @@
-import { readRecord, writeRecords, validateCountBackup, validateTimestamp, validateEvents } from "./count-store.js";
+import { readRecord, writeRecords, loadOODDefault, validateActiveCount, validateCountBackup, validateTimestamp, validateEvents } from "./count-store.js";
 import { RESOLUTIONS } from "./history-model.js";
 import { INITIAL_PIN } from "./pin-config.js";
 import { parseDate, offShelfDate } from "./expiry-model.js";
@@ -120,6 +120,13 @@ export async function unlockVault(pin) {
     key = await aesKey(pin, salt, ITERATIONS);
     vault = emptyVault();
   }
+  if (envelope && await loadOODDefault() !== (vault.settings?.shelfLifeMonths ?? 7)) {
+    if (started !== epoch) throw new Error("Unlock cancelled. Please enter your PIN again.");
+    await writeRecords([
+      { store: "coordinator", key: "vault", expectedCiphertext: envelope.ciphertext, checkOnly: true },
+      { store: "counts", key: "oodShelfDefault", value: vault.settings?.shelfLifeMonths ?? 7 },
+    ]);
+  }
   if (started !== epoch) throw new Error("Unlock cancelled. Please enter your PIN again.");
   session = { key, salt, vault, epoch: started, ciphertext: envelope?.ciphertext ?? null };
   if (!envelope) await saveVault(vault);
@@ -134,8 +141,8 @@ export function replaceVaultRecords(records) {
   return operation;
 }
 
-export function saveVault(vault, activeCount) {
-  return enqueueSave(vault, activeCount, false);
+export function saveVault(vault, activeCount, expectedActive) {
+  return enqueueSave(vault, activeCount, false, expectedActive);
 }
 
 export function saveOODDraft(draft) {
@@ -143,21 +150,24 @@ export function saveOODDraft(draft) {
   return enqueueSave((latest) => ({ ...latest, oodDraft: snapshot }), undefined, true);
 }
 
-function enqueueSave(vault, activeCount, finishAfterLock) {
+function enqueueSave(vault, activeCount, finishAfterLock, expectedActive) {
   if (!session) return Promise.reject(new Error("Coordinator is locked. Unlock before saving."));
   const captured = session;
   const update = typeof vault === "function" ? vault : () => snapshot;
   const snapshot = typeof vault === "function" ? null : structuredClone(validateVault(vault));
-  const publicCount = activeCount === undefined ? undefined : structuredClone(validateCountBackup(activeCount));
+  const publicCount = activeCount === undefined ? undefined : structuredClone(validateActiveCount(activeCount));
   const operation = queue.then(async () => {
     if (!finishAfterLock && epoch !== captured.epoch) throw new Error("Coordinator is locked. Unlock before saving.");
     const candidate = validateVault(update(captured.vault));
     const envelope = await encryptVault(candidate, captured.key, captured.salt);
     if (!finishAfterLock && epoch !== captured.epoch) throw new Error("Coordinator locked before save. Please unlock and retry.");
-    await writeRecords([{ store: "coordinator", key: "vault", value: envelope, expectedCiphertext: captured.ciphertext }, ...(publicCount === undefined ? [] : [{ store: "counts", key: "active", value: publicCount }])]);
+    await writeRecords([
+      { store: "coordinator", key: "vault", value: envelope, expectedCiphertext: captured.ciphertext },
+      { store: "counts", key: "oodShelfDefault", value: candidate.settings?.shelfLifeMonths ?? 7 },
+      ...(publicCount === undefined ? [] : [{ store: "counts", key: "active", value: publicCount, ...(expectedActive === undefined ? {} : { expectedActive }) }]),
+    ]);
     captured.vault = candidate;
     captured.ciphertext = envelope.ciphertext;
-    if (!finishAfterLock && epoch !== captured.epoch) throw new Error("Coordinator locked. Unlock to load your saved record.");
     return finishAfterLock ? undefined : structuredClone(candidate);
   });
   queue = operation.catch(() => {});

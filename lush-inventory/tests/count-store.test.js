@@ -37,3 +37,12 @@ test("invalid backup is rejected without replacing the active count", async () =
   await assert.rejects(() => restoreBackup(JSON.stringify({ schemaVersion: 99, products: [] })), /backup/i);
   assert.deepEqual(await loadActiveCount(), current);
 });
+
+test("a stale active snapshot cannot overwrite or delete a newer count", async () => {
+  const before = sample(), after = { ...before, fileName: "next.xlsx" };
+  await saveActiveCount(before);
+  await saveActiveCount(after, before);
+  await assert.rejects(() => saveActiveCount(before, before), /changed/i);
+  await assert.rejects(() => clearActiveCount(before), /changed/i);
+  assert.deepEqual(await loadActiveCount(), after);
+});
