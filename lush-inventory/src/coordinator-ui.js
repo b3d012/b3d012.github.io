@@ -1,6 +1,7 @@
 import { unlockVault, saveVault, saveOODDraft, lockVault, isVaultUnlocked, changePin, loadEnvelope } from "./coordinator-store.js";
 import { renderOODCounts } from "./ood-ui.js";
 import { countModeLabel, countTitle } from "./count-naming.js";
+import { createOODCount, oodTotals } from "./ood-count.js";
 import { archiveCount, reviseOutcome, linkDiscrepancies, historySummary, compareSnapshots, RESOLUTIONS, isPhysical } from "./history-model.js";
 import { dubaiToday, addDays, expiryStatus, offShelfDate, saveExpiryRecord, recordDepartmentCheck, parseDate } from "./expiry-model.js";
 import { productTotals, summarizeProducts } from "./count-model.js";
@@ -12,8 +13,9 @@ const e = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&am
 const n = (value) => typeof value === "number" && Number.isFinite(value) ? new Intl.NumberFormat("en-GB", { maximumFractionDigits: 5 }).format(value) : "—";
 const money = (value) => `AED ${new Intl.NumberFormat("en-GB", { maximumFractionDigits: 2 }).format(value)}`;
 const date = (value) => value ? new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeZone: "Asia/Dubai" }).format(new Date(value.length === 10 ? `${value}T12:00:00Z` : value)) : "Unknown";
-let root, context, vault, tab = "overview", selectedArchive = null, query = "", department = "ALL", risk = "risk", busy = false, timer, controller, assessmentDate, historyMode = "";
+let root, context, vault, tab = "overview", selectedArchive = null, query = "", department = "ALL", risk = "risk", busy = false, timer, controller, assessmentDate, historyMode = "", oodEntry = false, oodSource = null;
 let draftWrite = Promise.resolve();
+let generation = 0;
 
 function download(content, filename, type = "application/json") {
   const url = URL.createObjectURL(new Blob([content], { type }));
@@ -22,15 +24,17 @@ function download(content, filename, type = "application/json") {
 }
 const button = (id, text, style = "secondary") => `<button id="${id}" class="${style}" type="button">${text}</button>`;
 const input = (name, label, value = "", type = "text", extra = "") => `<label class="coordField">${label}<input name="${name}" type="${type}" value="${e(value)}" ${extra}></label>`;
-const departments = () => [...new Set([...(context.getActiveCount()?.products || []).map((p) => p.department || "Unknown department"), ...vault.archives.flatMap((a) => a.count.products.map((p) => p.department || "Unknown department")), ...vault.expiryRecords.map((r) => r.department), ...vault.departmentChecks.map((c) => c.department)])].sort();
+const departments = () => [...new Set([...(context.getActiveCount()?.products || []).map((p) => p.department || "Unknown department"), ...vault.archives.flatMap((a) => a.count.products.map((p) => p.department || "Unknown department")), ...(vault.oodCounts || []).flatMap((c) => c.products.map((p) => p.department || "Unknown department")), ...vault.expiryRecords.map((r) => r.department), ...vault.departmentChecks.map((c) => c.department)])].sort();
 const departmentList = () => `<datalist id="departments">${departments().map((d) => `<option value="${e(d)}">`).join("")}</datalist>`;
 function touch() { clearTimeout(timer); if (isVaultUnlocked()) timer = setTimeout(lockCoordinator, 300000); }
-export function lockCoordinator() { clearTimeout(timer); lockVault(); vault = null; busy = false; if (root) renderLocked(); }
-function exit() { clearTimeout(timer); controller?.abort(); lockVault(); vault = null; context.onExit(); root = null; }
+export function lockCoordinator() { generation++; clearTimeout(timer); lockVault(); vault = null; busy = false; if (root) renderLocked(); }
+function exit() { generation++; clearTimeout(timer); controller?.abort(); lockVault(); vault = null; oodSource = null; root = null; context.onExit(); }
 
 export function mountCoordinator(target, callbacks) {
+  generation++;
   controller?.abort(); clearTimeout(timer); lockVault();
   draftWrite = Promise.resolve();
+  oodEntry = Boolean(callbacks.openOOD); oodSource = callbacks.oodSource || null; historyMode = "";
   root = target; context = callbacks; vault = null; tab = "overview"; selectedArchive = null; query = ""; department = "ALL"; busy = false; assessmentDate = dubaiToday();
   controller = new window.AbortController();
   for (const event of ["pointerdown", "keydown"]) document.addEventListener(event, touch, { signal: controller.signal });
@@ -41,46 +45,66 @@ export function mountCoordinator(target, callbacks) {
 
 function renderLocked(message = "") {
   if (!root) return;
-  root.innerHTML = `<div class="topbar"><div class="brand">Stock coordinator</div>${button("exitCoordinator", "Back to count")}</div><section class="card pinCard"><div class="lockMark" aria-hidden="true">●</div><div class="eyebrow">Your private records</div><h1>Unlock coordinator</h1><p>History, expiry batches and follow-up notes stay on this tablet.</p><form id="pinForm">${input("pin", "Four-digit PIN", "", "password", 'inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required autocomplete="off"')}<p id="pinError" role="alert" class="formError">${e(message)}</p><button class="primary" type="submit">Unlock</button></form><p class="small muted">A four-digit PIN provides casual privacy on this shared tablet. Keep a backup of your records.</p></section>`;
+  root.innerHTML = `<div class="topbar"><div class="brand">Stock coordinator</div>${button("exitCoordinator", oodEntry ? "Back to inventory" : "Back to count")}</div><section class="card pinCard"><div class="lockMark" aria-hidden="true">●</div><div class="eyebrow">Your private records</div><h1>Unlock coordinator</h1><p>History, expiry batches and follow-up notes stay on this tablet.</p><form id="pinForm">${input("pin", "Four-digit PIN", "", "password", 'inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required autocomplete="off"')}<p id="pinError" role="alert" class="formError">${e(message)}</p><button class="primary" type="submit">Unlock</button></form><p class="small muted">A four-digit PIN provides casual privacy on this shared tablet. Keep a backup of your records.</p></section>`;
   root.querySelector("#exitCoordinator").onclick = exit;
   root.querySelector("#pinForm").onsubmit = async (event) => {
     event.preventDefault(); if (busy) return; busy = true;
-    const pin = event.currentTarget.elements.pin.value;
-    event.currentTarget.elements.pin.value = "";
-    event.currentTarget.querySelector("button").disabled = true;
-    try { const unlocked = await unlockVault(pin); if (!root || !isVaultUnlocked()) return; vault = unlocked; draftWrite = Promise.resolve(); busy = false; touch(); render(); }
-    catch (error) { busy = false; if (root) renderLocked(error.message); }
+    const form = event.currentTarget, pin = form.elements.pin.value;
+    form.elements.pin.value = "";
+    form.querySelector("button").disabled = true;
+    try {
+      const unlocked = await unlockVault(pin);
+      if (!form.isConnected || !isVaultUnlocked()) return;
+      vault = unlocked; draftWrite = Promise.resolve(); touch();
+      if (oodSource) {
+        if (!vault.oodDraft || window.confirm("Replace the current OOD draft with this workbook? Choose Cancel to resume the existing draft.")) {
+          const draft = createOODCount(oodSource, dubaiToday(), vault.settings?.shelfLifeMonths ?? 7);
+          await persist({ ...vault, oodDraft: draft });
+        }
+        if (!form.isConnected) return;
+        context.onOODStarted?.();
+      }
+      oodSource = null; busy = false; render();
+    }
+    catch (error) {
+      if (!form.isConnected) return;
+      clearTimeout(timer); lockVault(); vault = null; busy = false; renderLocked(error.message);
+    }
   };
 }
 
 function shell(content) {
-  root.innerHTML = `<div class="topbar"><div><div class="eyebrow">Private · ${date(dubaiToday())}</div><div class="brand">Stock coordinator</div></div><div class="actions">${button("exitCoordinator", "Back to count")}${button("lockCoordinator", "Lock")}</div></div><nav class="coordNav" aria-label="Coordinator sections">${[["overview", "Overview"], ["history", "History"], ["ood", "OOD tracker"]].map(([key, label]) => `<button class="chip${tab === key ? " active" : ""}" data-tab="${key}">${label}</button>`).join("")}</nav><div id="coordinatorContent">${content}</div><p id="coordinatorError" class="formError" role="alert"></p>`;
+  root.innerHTML = `<div class="topbar"><div><div class="eyebrow">Private · ${date(dubaiToday())}</div><div class="brand">${oodEntry ? "Inventory counting" : "Stock coordinator"}</div></div><div class="actions">${button("exitCoordinator", "Back to count")}${button("lockCoordinator", "Lock")}</div></div><nav class="coordNav" aria-label="Coordinator sections"${oodEntry ? " hidden" : ""}>${[["overview", "Overview"], ["history", "History"]].map(([key, label]) => `<button class="chip${tab === key ? " active" : ""}" data-tab="${key}">${label}</button>`).join("")}</nav><div id="coordinatorContent">${content}</div><p id="coordinatorError" class="formError" role="alert"></p>`;
   root.querySelector("#exitCoordinator").onclick = exit;
   root.querySelector("#lockCoordinator").onclick = lockCoordinator;
   root.querySelectorAll("[data-tab]").forEach((item) => item.onclick = () => { if (busy) return; tab = item.dataset.tab; selectedArchive = null; query = ""; render(); });
 }
 async function work(action) {
   if (busy) return;
+  const started = generation;
   busy = true;
   const controls = [...root.querySelectorAll("button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)")];
   controls.forEach((item) => item.disabled = true);
   try { await action(); }
-  catch (error) { if (root) { if (isVaultUnlocked()) root.querySelector("#coordinatorError").textContent = error.message; else { vault = null; renderLocked(error.message); } } }
-  finally { busy = false; controls.forEach((item) => item.disabled = false); }
+  catch (error) { if (root && generation === started) { if (isVaultUnlocked()) root.querySelector("#coordinatorError").textContent = error.message; else { vault = null; renderLocked(error.message); } } }
+  finally { if (generation === started) busy = false; controls.forEach((item) => item.disabled = false); }
 }
 async function persist(candidate, activeCount) { const saved = await saveVault(candidate, activeCount); if (!isVaultUnlocked()) throw new Error("Coordinator locked. Unlock to continue."); vault = saved; draftWrite = Promise.resolve(); }
-function renderOOD() {
+function finishOOD() {
+  oodEntry = false; tab = "history"; historyMode = "ood"; selectedArchive = null; query = ""; department = "ALL"; renderHistory();
+}
+function renderOOD(page = "entry", id) {
   renderOODCounts({
-    root, shell, e, n, date, button, getVault: () => vault, work, persist, download, toast: context.toast, showBatches: renderBatches,
+    root, shell, e, n, date, button, getVault: () => vault, work, persist, download, toast: context.toast, finishOOD, onHome: exit, onHistory: renderHistory,
     autosave(next) {
       vault = { ...vault, oodDraft: next };
       draftWrite = saveOODDraft(next);
       draftWrite.catch((error) => { if (vault?.oodDraft === next && isVaultUnlocked()) context.toast(`OOD count not saved: ${error.message}`); });
       return draftWrite;
     },
-  });
+  }, page, id);
 }
-function render() { if (!root) return; if (!vault || !isVaultUnlocked()) return renderLocked(); touch(); if (tab === "history") renderHistory(); else if (tab === "ood") renderOOD(); else renderOverview(); }
+function render() { if (!root) return; if (!vault || !isVaultUnlocked()) return renderLocked(); touch(); if (oodEntry) renderOOD(); else if (tab === "history") renderHistory(); else renderOverview(); }
 
 function renderOverview() {
   const summary = historySummary(vault, context.getActiveCount()), today = dubaiToday();
@@ -89,8 +113,9 @@ function renderOverview() {
   const checks = departments().map((d) => ({ department: d, last: [...vault.departmentChecks].filter((c) => c.department === d).sort((a, b) => b.date.localeCompare(a.date))[0] }));
   const active = context.getActiveCount();
   const archived = active && vault.archives.some((a) => a.id === active.id);
-  shell(`<section class="coordHeading"><h1>Your stock desk</h1><p>Weekly department checks, with a record of what you found and what happened next.</p></section><div class="coordMetrics">${[["Saved counts", vault.archives.length], ["Pending observations", summary.pending.length], ["Batches due within 3 months", due.length], ["Repeat shortage patterns", summary.repeatShortages.length]].map(([label, value]) => `<div class="metric">${label}<b>${value}</b></div>`).join("")}</div><div class="coordColumns"><section class="card coordPanel"><div class="eyebrow">Current ${countModeLabel(active)}</div><h2>${e(active ? countTitle(active) : "Upload a count to get started")}</h2><p>${active ? `${summarizeProducts(active.products).complete}/${active.products.length} confirmed · Snapshot ${date(active.postingDate)}` : "The normal counting screen stays immediately accessible."}</p>${active ? archived ? '<div class="notice success">This count is already archived. Your original observations are preserved.</div>' : button("archiveCurrent", "Archive current count", "primary") : ""}<p class="small muted">Archive before starting another count. MAX entries are labelled accepted from pre-inventory, rather than physically recounted.</p></section><section class="card coordPanel"><div class="eyebrow">Recorded cost exposure</div><h2>${money(summary.shortageValue)} shortage</h2><p>${money(summary.surplusValue)} surplus · ${summary.unknownCost} observations without usable cost/unit data.</p><p class="small muted">Across saved physical count observations. Repeated observations may describe the same unresolved shortage; these totals are not confirmed new losses. Retail sales value is not included.</p></section></div><section class="card coordPanel"><h2>Department checks</h2><p class="muted">Check expiry dates alongside your weekly count rotation. Imports do not complete an OOD inspection.</p>${checks.length ? `<div class="tableWrap"><table class="previewTable"><thead><tr><th>Department</th><th>Last stock snapshot</th><th>Last import</th><th>Last completed count</th><th>Last OOD check</th><th>Next OOD review</th></tr></thead><tbody>${checks.map(({ department: d, last }) => { const snapshot = summary.departments.find((x) => x.department === d); return `<tr><td>${e(d)}</td><td>${date(snapshot?.lastSnapshot)}</td><td>${date(snapshot?.lastImport)}</td><td>${date(snapshot?.lastCount)}</td><td>${last ? date(last.date) : "Not checked"}</td><td>${last ? `${date(last.nextDate)}${last.nextDate <= today ? " · Due" : ""}` : "Set after checking"}</td></tr>`; }).join("")}</tbody></table></div>` : '<p>No department records yet.</p>'}</section>${summary.repeatShortages.length ? `<section class="card coordPanel"><h2>Repeated unexplained shortages</h2>${summary.repeatShortages.map((r) => `<p><strong>${e(r.product.description)}</strong> · ${r.observations} observations · latest ${n(r.latestVariance)} ${e(r.product.unit || "units unknown")}<br><span class="muted small">${r.dates.map(date).join("; ")}</span></p>`).join("")}<p class="small muted">Review counting errors, PLUs, testers and other explanations. A shortage pattern alone does not identify theft.</p></section>` : ""}<section class="card coordPanel"><h2>Backup & settings</h2><div class="actions coordActions">${button("fullBackup", "Download full backup")}${button("reportDownload", "Download coordinator report")}${button("pinChange", "Change PIN")}${button("shelfSettings", "Shelf-life default")}<label class="upload secondary">Restore full backup<input id="fullRestore" type="file" accept="application/json,.json"></label></div><p class="small muted">Full backups preserve encrypted private records. Download one after finishing a count. Reports contain plaintext private notes; store them carefully. Records are local to this browser, without cloud sync.</p></section>`);
+  shell(`<section class="coordHeading"><h1>Your stock desk</h1><p>Weekly department checks, with a record of what you found and what happened next.</p></section><div class="coordMetrics">${[["Saved counts", vault.archives.length + (vault.oodCounts?.length || 0)], ["Pending observations", summary.pending.length], ["Batches due within 3 months", due.length], ["Repeat shortage patterns", summary.repeatShortages.length]].map(([label, value]) => `<div class="metric">${label}<b>${value}</b></div>`).join("")}</div><div class="coordColumns"><section class="card coordPanel"><div class="eyebrow">Current ${countModeLabel(active)}</div><h2>${e(active ? countTitle(active) : "Upload a count to get started")}</h2><p>${active ? `${summarizeProducts(active.products).complete}/${active.products.length} confirmed · Snapshot ${date(active.postingDate)}` : "The normal counting screen stays immediately accessible."}</p>${active ? archived ? '<div class="notice success">This count is already archived. Your original observations are preserved.</div>' : button("archiveCurrent", "Archive current count", "primary") : ""}<p class="small muted">Archive before starting another count. MAX entries are labelled accepted from pre-inventory, rather than physically recounted.</p></section><section class="card coordPanel"><div class="eyebrow">Recorded cost exposure</div><h2>${money(summary.shortageValue)} shortage</h2><p>${money(summary.surplusValue)} surplus · ${summary.unknownCost} observations without usable cost/unit data.</p><p class="small muted">Across saved physical count observations. Repeated observations may describe the same unresolved shortage; these totals are not confirmed new losses. Retail sales value is not included.</p></section></div><section class="card coordPanel"><h2>Department checks</h2><p class="muted">Check expiry dates alongside your weekly count rotation. Imports do not complete an OOD inspection.</p>${checks.length ? `<div class="tableWrap"><table class="previewTable"><thead><tr><th>Department</th><th>Last stock snapshot</th><th>Last import</th><th>Last completed count</th><th>Last OOD check</th><th>Next OOD review</th></tr></thead><tbody>${checks.map(({ department: d, last }) => { const snapshot = summary.departments.find((x) => x.department === d); return `<tr><td>${e(d)}</td><td>${date(snapshot?.lastSnapshot)}</td><td>${date(snapshot?.lastImport)}</td><td>${date(snapshot?.lastCount)}</td><td>${last ? date(last.date) : "Not checked"}</td><td>${last ? `${date(last.nextDate)}${last.nextDate <= today ? " · Due" : ""}` : "Set after checking"}</td></tr>`; }).join("")}</tbody></table></div>` : '<p>No department records yet.</p>'}</section>${summary.repeatShortages.length ? `<section class="card coordPanel"><h2>Repeated unexplained shortages</h2>${summary.repeatShortages.map((r) => `<p><strong>${e(r.product.description)}</strong> · ${r.observations} observations · latest ${n(r.latestVariance)} ${e(r.product.unit || "units unknown")}<br><span class="muted small">${r.dates.map(date).join("; ")}</span></p>`).join("")}<p class="small muted">Review counting errors, PLUs, testers and other explanations. A shortage pattern alone does not identify theft.</p></section>` : ""}<section class="card coordPanel"><h2>Backup & settings</h2><div class="actions coordActions">${button("fullBackup", "Download full backup")}${button("reportDownload", "Download coordinator report")}${button("pinChange", "Change PIN")}${button("shelfSettings", "Shelf-life default")}${button("batchRecords", "Batch records")}<label class="upload secondary">Restore full backup<input id="fullRestore" type="file" accept="application/json,.json"></label></div><p class="small muted">Full backups preserve encrypted private records. Download one after finishing a count. Reports contain plaintext private notes; store them carefully. Records are local to this browser, without cloud sync.</p></section>`);
   root.querySelector("#archiveCurrent")?.addEventListener("click", () => archiveActive());
+  root.querySelector("#batchRecords").onclick = renderBatches;
   root.querySelector("#fullBackup").onclick = () => work(async () => { await draftWrite; download(createFullBackup(await loadActiveCount(), await loadEnvelope()), `lush-stock-backup-${today}.json`); context.toast("Full backup downloaded."); });
   root.querySelector("#reportDownload").onclick = () => work(async () => {
     if (!window.confirm("This report includes private notes as readable Excel data. Download it?")) return;
@@ -107,6 +132,7 @@ function archiveActive(snapshotDate) {
     root.querySelector("#archiveDate").onsubmit = (event) => { event.preventDefault(); archiveActive(event.currentTarget.elements.date.value); }; return;
   }
   work(async () => {
+    const started = generation;
     const count = structuredClone(active); count.postingDate = snapshotDate || count.postingDate; parseDate(count.postingDate);
     if (count.postingDate > dubaiToday()) throw new Error("Snapshot date cannot be in the future.");
     const incomplete = summarizeProducts(count.products).incomplete;
@@ -114,6 +140,7 @@ function archiveActive(snapshotDate) {
     const marked = { ...count, archivedAt: new Date().toISOString() };
     await persist(archiveCount(vault, count, marked.archivedAt), marked);
     await context.saveActiveCount(marked);
+    if (generation !== started) return;
     context.onArchived?.(count.id);
     tab = "history"; selectedArchive = count.id; render(); context.toast("Archived. Download a full backup to keep these records safe.");
   });
@@ -122,17 +149,19 @@ function archiveActive(snapshotDate) {
 function renderHistory() {
   if (selectedArchive) return renderArchive(vault.archives.find((a) => a.id === selectedArchive));
   const needle = query.toLowerCase().trim();
-  const archives = [...vault.archives].reverse().filter((a) => {
-    if (historyMode && (a.count.countMode || "legacy") !== historyMode) return false;
+  const ood = (vault.oodCounts || []).map((count) => ({ id: count.id, count, archivedAt: count.archivedAt, ood: true }));
+  const archives = [...ood, ...vault.archives].sort((a, b) => b.archivedAt.localeCompare(a.archivedAt)).filter((a) => {
+    if (historyMode && (a.ood ? "ood" : a.count.countMode || "legacy") !== historyMode) return false;
     const titleMatches = !needle || `${a.count.fileName} ${countTitle(a.count)}`.toLowerCase().includes(needle);
     return a.count.products.some((p) => (department === "ALL" || (p.department || "Unknown department") === department) &&
       (titleMatches || `${p.description} ${p.plu} ${p.category}`.toLowerCase().includes(needle)));
   });
-  shell(`<section class="coordHeading"><h1>Count history</h1><p>Original observations stay intact. Final declarations and follow-ups are recorded separately.</p></section><div class="tools oodTools"><input id="historySearch" class="search" value="${e(query)}" placeholder="Search by count name, product or PLU"><select id="historyDepartment" class="categorySelect" aria-label="History department"><option value="ALL">All departments</option>${departments().map((d) => `<option${department === d ? " selected" : ""}>${e(d)}</option>`).join("")}</select><select id="historyMode" class="categorySelect" aria-label="Count mode"><option value="">All modes</option>${[["pre-inventory", "Pre Inventory"], ["cycle", "Cycle Count"], ["legacy", "Older counts"]].map(([key, label]) => `<option value="${key}"${historyMode === key ? " selected" : ""}>${label}</option>`).join("")}</select></div>${archives.length ? archives.map((a) => `<button class="reviewRow" data-archive="${e(a.id)}"><span class="reviewRowTop"><span>${e(countTitle(a.count))}</span><span>${date(a.count.postingDate)}</span></span><span class="reviewNums">${[...new Set(a.count.products.map((p) => p.department || "Unknown department"))].map(e).join(", ")} · ${summarizeProducts(a.count.products).complete}/${a.count.products.length} confirmed${a.count.supersedesId ? " · Linked amendment" : ""} · archived ${date(a.archivedAt)}</span></button>`).join("") : '<section class="card empty">No saved counts match. Archive a count from Overview to start your history.</section>'}`);
+  shell(`<section class="coordHeading"><h1>Count history</h1><p>Original observations stay intact. Final declarations and follow-ups are recorded separately.</p></section><div class="tools oodTools"><input id="historySearch" class="search" value="${e(query)}" placeholder="Search by count name, product or PLU"><select id="historyDepartment" class="categorySelect" aria-label="History department"><option value="ALL">All departments</option>${departments().map((d) => `<option${department === d ? " selected" : ""}>${e(d)}</option>`).join("")}</select><select id="historyMode" class="categorySelect" aria-label="Count mode"><option value="">All modes</option>${[["pre-inventory", "Pre Inventory"], ["cycle", "Cycle Count"], ["ood", "OOD Count"], ["legacy", "Older counts"]].map(([key, label]) => `<option value="${key}"${historyMode === key ? " selected" : ""}>${label}</option>`).join("")}</select></div>${archives.length ? archives.map((a) => `<button class="reviewRow" data-${a.ood ? "ood-archive" : "archive"}="${e(a.id)}"><span class="reviewRowTop"><span>${e(countTitle(a.count))}</span><span>${date(a.ood ? a.count.checkedOn : a.count.postingDate)}</span></span><span class="reviewNums">${[...new Set(a.count.products.map((p) => p.department || "Unknown department"))].map(e).join(", ")} · ${a.ood ? a.count.products.filter((p) => oodTotals(p).complete).length : summarizeProducts(a.count.products).complete}/${a.count.products.length} confirmed${a.count.supersedesId ? " · Linked amendment" : ""} · archived ${date(a.archivedAt)}</span></button>`).join("") : '<section class="card empty">No saved counts match. Archive a count from Overview to start your history.</section>'}`);
   root.querySelector("#historySearch").oninput = (event) => { query = event.target.value; renderHistory(); const field = root.querySelector("#historySearch"); field.focus(); field.setSelectionRange(query.length, query.length); };
   root.querySelector("#historyDepartment").onchange = (event) => { department = event.target.value; renderHistory(); };
   root.querySelector("#historyMode").onchange = (event) => { historyMode = event.target.value; renderHistory(); };
   root.querySelectorAll("[data-archive]").forEach((b) => b.onclick = () => { selectedArchive = b.dataset.archive; query = ""; renderHistory(); });
+  root.querySelectorAll("[data-ood-archive]").forEach((b) => b.onclick = () => renderOOD("archive", b.dataset.oodArchive));
 }
 function renderArchive(archive) {
   if (!archive) { selectedArchive = null; return renderHistory(); }
@@ -162,8 +191,8 @@ function renderBatches() {
   const today = assessmentDate || dubaiToday();
   const records = vault.expiryRecords.filter((r) => (department === "ALL" || r.department === department) && (!query.trim() || `${r.plu} ${r.description} ${r.batch || ""}`.toLowerCase().includes(query.trim().toLowerCase()))).filter((r) => { const key = expiryStatus(r, today).key; return risk === "all" || (risk === "risk" ? ["overdue", "today", "30", "60", "3-months"].includes(key) : key === risk); }).sort((a, b) => offShelfDate(a).localeCompare(offShelfDate(b)));
   shell(`<section class="coordHeading"><div class="headerLine"><div><h1>OOD tracker</h1><p>Production date + ${vault.settings?.shelfLifeMonths ?? 7} calendar months by default. Track each batch separately.</p></div><div class="actions">${button("newBatch", "Add batch", "primary")}${button("recordCheck", "Record department check")}</div></div></section><label class="coordField">Check date<input id="oodCheckDate" type="date" value="${e(today)}"></label><div class="tools"><input id="oodSearch" class="search" placeholder="Find expiry batch or PLU" value="${e(query)}"><select id="oodDepartment" class="categorySelect" aria-label="OOD department"><option value="ALL">All departments</option>${departments().map((d) => `<option${department === d ? " selected" : ""}>${e(d)}</option>`).join("")}</select></div><div class="categoryRail">${[["risk", "Next 3 months + overdue"], ["overdue", "Overdue"], ["today", "Off shelf today"], ["30", "Within 30 days"], ["60", "31–60 days"], ["3-months", "Later within 3 months"], ["all", "All batches"], ["closed", "Closed"]].map(([key, label]) => `<button class="chip${risk === key ? " active" : ""}" data-risk="${key}">${label}</button>`).join("")}</div><p class="small muted">Quantities are observations, not live stock balances. Update or close batches after verifying what happened; stock-file changes do not automatically deduct them.</p>${records.length ? records.map((r) => { const status = expiryStatus(r, today); return `<article class="card batchCard ${status.key === "overdue" || status.key === "today" ? "urgent" : ""}"><div class="headerLine"><div><span class="badge">${e(status.label)}</span><h2>${e(r.description || r.plu)}</h2><p class="small muted">PLU ${e(r.plu)} · ${e(r.department)}${r.batch ? ` · Batch ${e(r.batch)}` : ""}${r.location ? ` · ${e(r.location)}` : ""}</p></div><div class="batchDue"><span>Off shelf</span><strong>${date(status.due)}</strong><span>${n(r.quantity)} ${e(r.unit)}</span></div></div><p class="small">Produced ${date(r.productionDate)} · ${r.expiryOverride ? "Explicit expiry / off-shelf date" : `${r.shelfLifeMonths ?? 7}-month rule`} · Last observed ${date(r.observedAt)}${r.status === "closed" ? ` · ${e(r.closureReason)}` : ""}</p><div class="actions coordActions"><button class="secondary" data-edit-batch="${e(r.id)}">Edit / history</button>${r.status !== "closed" ? `<button class="secondary" data-close-batch="${e(r.id)}">Close batch</button>` : ""}</div></article>`; }).join("") : '<section class="card empty">No batches in this view. Record products during the physical expiry check, or choose All batches.</section>'}`);
-  root.querySelector("#coordinatorContent").insertAdjacentHTML("afterbegin", `<div class="actions coordActions oodNav">${button("returnOODCount", "Back to OOD Count")}</div>`);
-  root.querySelector("#returnOODCount").onclick = renderOOD;
+  root.querySelector("#coordinatorContent").insertAdjacentHTML("afterbegin", `<div class="actions coordActions oodNav">${button("returnOODCount", "Back to Overview")}</div>`);
+  root.querySelector("#returnOODCount").onclick = renderOverview;
   root.querySelector("#oodCheckDate").onchange = (event) => { try { parseDate(event.target.value); assessmentDate = event.target.value; renderBatches(); } catch (error) { root.querySelector("#coordinatorError").textContent = error.message; } };
   root.querySelector("#newBatch").onclick = () => renderBatch();
   root.querySelector("#recordCheck").onclick = renderCheck;

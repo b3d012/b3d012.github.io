@@ -12,7 +12,8 @@ export const OOD_BUCKETS = [
 
 export function createOODCount(source, checkedOn, shelfLifeMonths) {
   const { id, fileName, importedAt, postingDate, warnings } = source;
-  return { id, fileName, importedAt, postingDate, warnings, checkedOn, shelfLifeMonths, countMode: "ood",
+  const areaLabel = source.areaLabel?.trim().slice(0, 200).trimEnd() || undefined;
+  return { id, fileName, importedAt, postingDate, warnings, checkedOn, shelfLifeMonths, areaLabel, countMode: "ood",
     products: source.products.map(({ id, category, plu, description, onHand, department, unit }) => ({
       id, category, plu, description, onHand, department, unit, confirmed: false, entered: [],
       buckets: Object.fromEntries(OOD_BUCKETS.map(([key]) => [key, key === "later" ? "" : "0"])),

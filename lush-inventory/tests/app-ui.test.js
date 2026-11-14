@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { setTimeout as delay } from "node:timers/promises";
-import { saveActiveCount, loadActiveCount } from "../src/count-store.js";
+import { saveActiveCount, loadActiveCount, clearActiveCount } from "../src/count-store.js";
 import { lockCoordinator } from "../src/coordinator-ui.js";
 import XLSX from "xlsx";
 import { readFile } from "node:fs/promises";
@@ -41,8 +41,8 @@ test("import preview requires a mode and saves a named Pre Inventory", async (t)
   Object.defineProperty(globalThis, "navigator", { configurable: true, value: dom.window.navigator });
   globalThis.confirm = () => true;
   t.after(() => dom.window.close());
+  await clearActiveCount();
   await import("../src/app.js?mode-test");
-  document.querySelector("#clearCount").click();
   const until = async (selector) => {
     for (let i = 0; i < 100; i++) {
       const node = document.querySelector(selector);
@@ -58,7 +58,7 @@ test("import preview requires a mode and saves a named Pre Inventory", async (t)
   const mode = await until("#countMode");
   const start = document.querySelector("#confirmImport");
   assert.equal(start.disabled, true);
-  assert.equal(document.querySelector("#countAreas").placeholder, "Haircare and Gifts");
+  assert.equal(document.querySelector("#countAreas").value, "Haircare and Gifts");
   mode.value = "pre-inventory"; mode.dispatchEvent(new window.Event("change"));
   const areas = document.querySelector("#countAreas");
   areas.value = "Skincare, Mouth and Makeup"; areas.dispatchEvent(new window.Event("input"));
@@ -70,4 +70,37 @@ test("import preview requires a mode and saves a named Pre Inventory", async (t)
   assert.equal(saved.countMode, "pre-inventory");
   assert.equal(saved.areaLabel, "Skincare, Mouth and Makeup");
   assert.equal(saved.fileName, "Journal.xlsx");
+});
+
+test("the shared upload starts OOD after the picker backgrounds the app, without replacing a regular count", async (t) => {
+  const dom = new JSDOM('<div id="app"></div><div id="toast"></div>', { url: "https://example.test/lush-inventory/", pretendToBeVisual: true });
+  globalThis.window = dom.window; globalThis.document = dom.window.document; globalThis.XLSX = XLSX;
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: dom.window.navigator });
+  window.confirm = () => true;
+  t.after(() => { lockCoordinator(); dom.window.close(); });
+  await import("../src/app.js?ood-mode-test");
+  const before = await loadActiveCount();
+  const until = async (selector) => {
+    for (let i = 0; i < 120; i++) { const el = document.querySelector(selector); if (el) return el; await delay(10); }
+    throw new Error(`Missing ${selector}`);
+  };
+  const upload = document.querySelector("#xlsxUpload");
+  const fixture = await readFile(new URL("./fixtures/PreChanges.xlsx", import.meta.url));
+  Object.defineProperty(document, "hidden", { configurable: true, value: true });
+  document.dispatchEvent(new window.Event("visibilitychange"));
+  Object.defineProperty(document, "hidden", { configurable: true, value: false });
+  document.dispatchEvent(new window.Event("visibilitychange"));
+  Object.defineProperty(upload, "files", { value: [new File([fixture], "New OOD.xlsx")] });
+  upload.dispatchEvent(new window.Event("change"));
+  const mode = await until("#countMode");
+  assert.ok([...mode.options].some((option) => option.value === "ood"));
+  mode.value = "ood"; mode.dispatchEvent(new window.Event("change"));
+  document.querySelector("#confirmImport").click();
+  const pin = await until('[name="pin"]');
+  pin.value = process.env.LUSH_TEST_PIN;
+  pin.form.dispatchEvent(new window.Event("submit", { cancelable: true }));
+  await until("[data-bucket]");
+  assert.equal(document.querySelector("#oodAreas").value, "Haircare and Gifts");
+  assert.equal(document.querySelector("#oodUpload"), null);
+  assert.deepEqual(await loadActiveCount(), before);
 });

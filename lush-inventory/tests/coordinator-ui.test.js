@@ -4,9 +4,10 @@ import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { setTimeout as delay } from "node:timers/promises";
 import { mountCoordinator, lockCoordinator } from "../src/coordinator-ui.js";
-import { lockVault } from "../src/coordinator-store.js";
+import { lockVault, isVaultUnlocked } from "../src/coordinator-store.js";
 import XLSX from "xlsx";
 import { readFile } from "node:fs/promises";
+import { importInventory } from "../src/xlsx-adapter.js";
 const OWNER_PIN = process.env.LUSH_TEST_PIN;
 if (!OWNER_PIN) throw new Error("Set LUSH_TEST_PIN to the configured owner PIN before running vault tests.");
 const waitFor = async (predicate) => { for (let i = 0; i < 100; i++) { if (predicate()) return; await delay(10); } throw new Error("UI did not reach expected state"); };
@@ -49,7 +50,7 @@ test("coordinator unlocks, archives, records OOD and removes private markup on l
   link.elements.target.value = "0"; link.elements.note.value = "Suspected wrong punch";
   link.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
   await waitFor(() => root.querySelector("#linkForm")?.parentElement.querySelector("p.small")?.textContent.includes("Suspected wrong punch"));
-  root.querySelector('[data-tab="ood"]').click();
+  root.querySelector('[data-tab="overview"]').click();
   root.querySelector("#batchRecords").click();
   root.querySelector("#newBatch").click();
   const form = root.querySelector("#batchForm");
@@ -66,7 +67,7 @@ test("coordinator unlocks, archives, records OOD and removes private markup on l
   check.elements.department.value = "OTHER SECTION";
   check.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
   await waitFor(() => root.textContent.includes("OTHER SECTION"));
-  root.querySelector('[data-tab="ood"]').click();
+  root.querySelector('[data-tab="overview"]').click();
   root.querySelector("#batchRecords").click();
   assert.ok(root.querySelector("#oodCheckDate"));
   root.querySelector("#oodCheckDate").value = "2026-10-02";
@@ -84,19 +85,15 @@ test("OOD workbook count saves separately, resumes after lock and opens a read-o
   window.confirm = () => true;
   t.after(() => { lockCoordinator(); dom.window.close(); });
   const root = document.getElementById("app");
-  mountCoordinator(root, { getActiveCount: () => null, onExit: () => {}, toast: () => {} });
+  const source = importInventory(await readFile(new URL("./fixtures/PreChanges.xlsx", import.meta.url)), "OOD Weekly.xlsx");
+  mountCoordinator(root, { getActiveCount: () => null, onExit: () => {}, toast: () => {}, openOOD: true, oodSource: source });
   const unlock = async () => {
     root.querySelector('[name="pin"]').value = OWNER_PIN;
     root.querySelector("#pinForm").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
-    await waitFor(() => root.querySelector('[data-tab="ood"]'));
-    root.querySelector('[data-tab="ood"]').click();
+    await waitFor(() => root.querySelector("[data-bucket]"));
   };
   await unlock();
-  const bytes = await readFile(new URL("./fixtures/PreChanges.xlsx", import.meta.url));
-  const upload = root.querySelector("#oodUpload");
-  Object.defineProperty(upload, "files", { value: [new File([bytes], "OOD Weekly.xlsx")] });
-  upload.dispatchEvent(new window.Event("change", { bubbles: true }));
-  await waitFor(() => root.querySelector("[data-bucket]"));
+  assert.equal(root.querySelector("#oodAreas").value, "Haircare and Gifts");
   const areas = root.querySelector("#oodAreas");
   areas.value = "Skincare and Mouth";
   areas.dispatchEvent(new window.Event("input", { bubbles: true }));
@@ -111,6 +108,12 @@ test("OOD workbook count saves separately, resumes after lock and opens a read-o
   root.querySelector("#reviewOOD").click();
   root.querySelector("#archiveOOD").click();
   await waitFor(() => root.querySelector("[data-ood-archive]"));
+  assert.deepEqual([...root.querySelectorAll("[data-tab]")].map((button) => button.textContent), ["Overview", "History"]);
+  assert.equal(root.querySelector("#historyMode").value, "ood");
+  assert.equal(root.querySelector("[data-archive]"), null);
+  const filter = root.querySelector("#historyMode");
+  filter.value = ""; filter.dispatchEvent(new window.Event("change"));
+  assert.ok(root.querySelector("[data-archive]"));
   assert.match(root.querySelector("[data-ood-archive]").textContent, /^OOD Count - Area Skincare and Mouth - /);
   root.querySelector("[data-ood-archive]").click();
   assert.match(root.textContent, /OOD Weekly.xlsx/);
@@ -131,4 +134,46 @@ test("a failed operation that locks the vault removes private markup and shows i
   root.querySelector("#archiveCurrent").click();
   await waitFor(() => root.querySelector("#pinError")?.textContent.includes("Storage failed"));
   assert.ok(!root.textContent.includes("Private archive"));
+});
+
+test("an abandoned PIN attempt cannot overwrite a new Coordinator screen", async (t) => {
+  const dom = new JSDOM('<div id="app"></div>', { url: "https://example.test/lush-inventory/", pretendToBeVisual: true });
+  globalThis.window = dom.window; globalThis.document = dom.window.document;
+  const root = document.getElementById("app");
+  t.after(() => { lockCoordinator(); dom.window.close(); });
+  const callbacks = { getActiveCount: () => null, onExit: () => {}, toast: () => {} };
+  mountCoordinator(root, callbacks);
+  const pin = root.querySelector('[name="pin"]');
+  pin.value = OWNER_PIN;
+  pin.form.dispatchEvent(new window.Event("submit", { cancelable: true }));
+  root.querySelector("#exitCoordinator").click();
+  mountCoordinator(root, callbacks);
+  const newPin = root.querySelector('[name="pin"]');
+  newPin.value = OWNER_PIN;
+  newPin.form.dispatchEvent(new window.Event("submit", { cancelable: true }));
+  await waitFor(() => root.querySelector('[data-tab="overview"]'));
+  assert.equal(root.querySelector("#pinError"), null);
+});
+
+test("a save rejected after background lock cannot interrupt the next unlock", async (t) => {
+  const dom = new JSDOM('<div id="app"></div>', { url: "https://example.test/lush-inventory/", pretendToBeVisual: true });
+  globalThis.window = dom.window; globalThis.document = dom.window.document;
+  const root = document.getElementById("app");
+  t.after(() => { lockCoordinator(); dom.window.close(); });
+  const count = { schemaVersion: 2, id: "background-save", fileName: "Count", postingDate: "2026-10-01", products: [{ id: "p", plu: "1", category: "A", description: "Item", onHand: 2, display: "2", cupboard: "0", storeRoom: "0", confirmed: true, provenance: "physical-recount" }] };
+  let failSave;
+  mountCoordinator(root, { getActiveCount: () => count, saveActiveCount: () => new Promise((resolve, reject) => { failSave = reject; }), onExit: () => {}, toast: () => {} });
+  const submit = () => {
+    const pin = root.querySelector('[name="pin"]'); pin.value = OWNER_PIN;
+    pin.form.dispatchEvent(new window.Event("submit", { cancelable: true }));
+  };
+  submit();
+  await waitFor(() => root.querySelector("#archiveCurrent"));
+  root.querySelector("#archiveCurrent").click();
+  await waitFor(() => failSave);
+  lockCoordinator();
+  submit();
+  failSave(new Error("Canceled previous save"));
+  await waitFor(() => root.querySelector('[data-tab="overview"]'));
+  assert.equal(isVaultUnlocked(), true);
 });

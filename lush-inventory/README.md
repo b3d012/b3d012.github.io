@@ -5,7 +5,7 @@ Tablet-first offline inventory counting app for weekly shop cycle counts.
 ## Use
 
 1. Open the app and upload the untouched weekly `.xlsx` export.
-2. Confirm the detected products, choose **Pre Inventory** or **Cycle Count**, and optionally edit the suggested areas. The name uses the Dubai date the count starts; OOD uses its check date. It appears in History and the downloaded Excel filename. Older archives retain their original names.
+2. Confirm the detected products, choose **Pre Inventory**, **Cycle Count**, or **OOD Count**, and optionally edit the Areas field filled from the workbook’s departments. The name uses the Dubai date the count starts; OOD uses its check date. It appears in History and the downloaded Excel filename. Older archives retain their original names.
 3. All locations start at zero, but a row stays unconfirmed until you edit it, confirm zero, or use MAX. MAX copies On Hand into Display, leaves the other locations zero, and records acceptance from pre-inventory.
 4. Review incomplete items and variances.
 5. Download the completed Excel workbook. The final Variance column shows On Hand minus the sum of Display, Cupboard, and Store Room. A positive value is a shortage; a negative value is an extra. Incomplete rows have a blank variance.
@@ -18,7 +18,7 @@ Open **Coordinator** and use your owner PIN. The private section encrypts archiv
 
 Archive each Cycle Count before uploading the next week's departments. Archived source quantities and physical observations stay unchanged. Later edits to an archived active count create a linked amendment. Record the final quantity declared separately, with a reason, related discrepancy, seasonal review flag or tester follow-up. Pending testers stay open until you confirm wastage; imports cannot confirm it. Cost totals describe saved observations, which can include the same unresolved shortage several times. On Hand changes are stock snapshot differences and do not establish sales or theft.
 
-Open **OOD Count** from the Coordinator's **OOD tracker** and upload the same stock Excel as Cycle Count. Count each unit in one of the five expiry windows. The **More than 3 Months to OOD** quantity is entered from the physical count so shortages remain visible. The draft saves as you work; use **Review count** to filter discrepancies, download Excel, and save a read-only snapshot to **OOD Count History**. The screen shows Counted minus On Hand; the workbook uses On Hand minus Counted, like the Cycle Count export. For printing, use landscape and fit all columns to one page wide.
+Upload your stock Excel from Home, choose **OOD Count**, then enter the PIN. To continue an existing draft, use **Resume OOD Count** on Home. Count each unit in one of the five expiry windows. The **More than 3 Months to OOD** quantity is entered from the physical count so shortages remain visible. The draft saves as you work; use **Review count** to filter discrepancies, download Excel, and save a read-only snapshot to **Coordinator → History** (select **OOD Count** in the mode filter). The screen shows Counted minus On Hand; the workbook uses On Hand minus Counted, like the Cycle Count export. For printing, use landscape and fit all columns to one page wide.
 
 The date guide uses the check date and the default off-shelf date of production plus **seven calendar months**, with month-end clamping. A printed override takes priority. An item due on the check date goes in **Already OOD** for action that day. **Batch records** retains the individual batch tracker and department check form.
 
@@ -26,7 +26,7 @@ Download a **full backup** after finishing each count. It includes the current c
 
 ## Updating the installed tablet app
 
-Keep your saved browser data. **Do not uninstall the app or clear storage.** Open [the existing app](https://b3d012.github.io/lush-inventory/) online, then close and reopen it to load the updated offline shell. The top bar shows **2.3** after updating. The same installed shortcut continues to work; reinstalling is unnecessary. If moving to another browser or tablet, restore a full backup there.
+Keep your saved browser data. **Do not uninstall the app or clear storage.** Open [the existing app](https://b3d012.github.io/lush-inventory/) online, then close and reopen it to load the updated offline shell. The top bar shows **2.4** after updating. The same installed shortcut continues to work; reinstalling is unnecessary. If moving to another browser or tablet, restore a full backup there.
 
 ## Development
 

@@ -38,12 +38,13 @@ function downloadText(text, name, type) {
 }
 
 function topbar() {
-  return `<div class="topbar"><div class="brand">Lush Inventory <span class="version">2.3</span></div><div class="actions"><button id="coordinator" class="secondary">Coordinator</button><button id="installApp" class="secondary install${installPrompt ? " show" : ""}">Install app</button></div></div>`;
+  return `<div class="topbar"><div class="brand">Lush Inventory <span class="version">2.4</span></div><div class="actions"><button id="coordinator" class="secondary">Coordinator</button><button id="installApp" class="secondary install${installPrompt ? " show" : ""}">Install app</button></div></div>`;
 }
 
-function openCoordinator() {
+function openCoordinator(ood = false, source = null) {
   view = "coordinator";
-  mountCoordinator(root, { getActiveCount: () => activeCount, saveActiveCount: async (count) => { activeCount = count; }, onExit: () => pendingCount ? renderPreview() : renderHome(), onArchived: () => { replacementReady = true; }, onRestored: async () => { activeCount = migrateCount(await loadActiveCount()); pendingCount = null; replacementReady = false; }, toast });
+  mountCoordinator(root, { getActiveCount: () => activeCount, saveActiveCount: async (count) => { activeCount = count; }, onExit: () => pendingCount ? renderPreview() : renderHome(), onArchived: () => { replacementReady = true; }, onRestored: async () => { activeCount = migrateCount(await loadActiveCount()); pendingCount = null; replacementReady = false; }, toast,
+    openOOD: ood === true, oodSource: source, onOODStarted: () => { pendingCount = null; replacementReady = false; } });
 }
 
 function fileUpload(label = "Upload weekly inventory file", className = "primary") {
@@ -58,30 +59,42 @@ function renderHome() {
     const summary = summarizeProducts(activeCount.products);
     root.innerHTML = `${topbar()}<section class="card savedCard"><div class="eyebrow">Current count</div><h1>${escapeHtml(countTitle(activeCount))}</h1><p class="productMeta">Imported ${escapeHtml(new Date(activeCount.importedAt).toLocaleString())}</p><div class="savedMeta"><div class="metric">Products<b>${summary.total}</b></div><div class="metric">Completed<b>${summary.complete}</b></div><div class="metric">Progress<b>${summary.percent}%</b></div></div><div class="actions"><button id="continueCount" class="primary">Continue current count</button>${fileUpload("Start new count", "secondary")}<button id="downloadBackup" class="secondary">Download backup</button><label class="upload secondary">Restore backup<input id="backupUpload" type="file" accept="application/json,.json"></label><button id="clearCount" class="danger">Delete current count</button></div></section>`;
   }
+  root.querySelector(".actions:last-child").insertAdjacentHTML("beforeend", '<button id="resumeOOD" class="secondary">Resume OOD Count</button>');
+  root.querySelector("#resumeOOD").onclick = () => openCoordinator(true);
   bindCommon();
 }
 
 function renderPreview() {
   const preview = pendingCount.products.slice(0, 5);
   const countCategories = new Set(pendingCount.products.map((product) => product.category)).size;
-  root.innerHTML = `${topbar()}<section class="card savedCard"><div class="eyebrow">Import preview</div><h1>${escapeHtml(pendingCount.fileName)}</h1><div class="savedMeta"><div class="metric">Products<b>${pendingCount.products.length}</b></div><div class="metric">Categories<b>${countCategories}</b></div><div class="metric">Columns found<b>4/4</b></div></div><div class="notice">Your current saved count will not be replaced until you press Start counting.</div><div class="tableWrap"><table class="previewTable"><thead><tr><th>Category</th><th>PLU</th><th>Description</th><th>On Hand</th></tr></thead><tbody>${preview.map((product) => `<tr><td>${escapeHtml(product.category)}</td><td>${escapeHtml(product.plu)}</td><td>${escapeHtml(product.description)}</td><td>${formatNumber(product.onHand)}</td></tr>`).join("")}</tbody></table></div><div class="actions"><button id="cancelPreview" class="secondary">Cancel</button><button id="confirmImport" class="primary">Start counting</button></div></section>`;
+  root.innerHTML = `${topbar()}<section class="card savedCard"><div class="eyebrow">Import preview</div><h1>${escapeHtml(pendingCount.fileName)}</h1><div class="savedMeta"><div class="metric">Products<b>${pendingCount.products.length}</b></div><div class="metric">Categories<b>${countCategories}</b></div><div class="metric">Columns found<b>4/4</b></div></div><div class="notice" id="importHint">Your current saved count will not be replaced until you press Start counting.</div><div class="tableWrap"><table class="previewTable"><thead><tr><th>Category</th><th>PLU</th><th>Description</th><th>On Hand</th></tr></thead><tbody>${preview.map((product) => `<tr><td>${escapeHtml(product.category)}</td><td>${escapeHtml(product.plu)}</td><td>${escapeHtml(product.description)}</td><td>${formatNumber(product.onHand)}</td></tr>`).join("")}</tbody></table></div><div class="actions"><button id="cancelPreview" class="secondary">Cancel</button><button id="confirmImport" class="primary">Start counting</button></div></section>`;
   if (pendingCount.warnings?.length) root.querySelector(".notice").insertAdjacentHTML("afterend", `<div class="notice">${pendingCount.warnings.map(escapeHtml).join("<br>")}</div>`);
-  if (activeCount) root.querySelector(".actions:last-child").insertAdjacentHTML("beforebegin", `<div class="notice">Before replacing ${escapeHtml(countTitle(activeCount))}, archive it in Coordinator or download a backup.</div><div class="actions" style="margin-bottom:14px"><button id="archiveBeforeReplace" class="secondary">Archive current count</button><button id="backupBeforeReplace" class="secondary">Download current count backup</button></div>`);
+  if (activeCount) root.querySelector(".actions:last-child").insertAdjacentHTML("beforebegin", `<div id="replaceRegular" style="margin-bottom:14px"><div class="notice">Before replacing ${escapeHtml(countTitle(activeCount))}, archive it in Coordinator or download a backup.</div><div class="actions"><button id="archiveBeforeReplace" class="secondary">Archive current count</button><button id="backupBeforeReplace" class="secondary">Download current count backup</button></div></div>`);
   bindCommon();
   const start = document.getElementById("confirmImport");
-  start.parentElement.insertAdjacentHTML("beforebegin", `<div class="coordForm"><label class="coordField">Count mode<select id="countMode"><option value="">Choose a count mode</option>${REGULAR_MODES.map(([key, label]) => `<option value="${key}">${label}</option>`).join("")}</select></label><label class="coordField">Areas<input id="countAreas" maxlength="200" placeholder="${escapeHtml(countAreas(pendingCount))}" value="${escapeHtml(pendingCount.areaLabel || "")}"></label></div>`);
+  const suggestedAreas = countAreas(pendingCount);
+  start.parentElement.insertAdjacentHTML("beforebegin", `<div class="coordForm"><label class="coordField">Count mode<select id="countMode"><option value="">Choose a count mode</option>${[...REGULAR_MODES, ["ood", "OOD Count"]].map(([key, label]) => `<option value="${key}">${label}</option>`).join("")}</select></label><label class="coordField">Areas<input id="countAreas" maxlength="200" placeholder="${escapeHtml(suggestedAreas)}" value="${escapeHtml(pendingCount.areaLabel ?? suggestedAreas.slice(0, 200).trimEnd())}"></label></div>`);
   const mode = document.getElementById("countMode");
   const areas = document.getElementById("countAreas");
   mode.value = pendingCount.countMode || "";
-  start.disabled = !mode.value;
-  mode.onchange = () => { pendingCount.countMode = mode.value; start.disabled = !mode.value; };
+  const syncMode = () => {
+    start.disabled = !mode.value;
+    const replacing = root.querySelector("#replaceRegular");
+    if (replacing) replacing.hidden = mode.value === "ood" || !mode.value;
+    root.querySelector("#importHint").textContent = mode.value === "ood"
+      ? "Unlock to start the OOD Count. Your regular count stays saved."
+      : "Your current saved count will not be replaced until you press Start counting.";
+  };
+  syncMode();
+  mode.onchange = () => { pendingCount.countMode = mode.value; syncMode(); };
   areas.oninput = () => { pendingCount.areaLabel = areas.value; };
   const archiveButton = document.getElementById("archiveBeforeReplace");
-  if (archiveButton) archiveButton.onclick = openCoordinator;
+  if (archiveButton) archiveButton.onclick = () => openCoordinator();
   const backupButton = document.getElementById("backupBeforeReplace");
   if (backupButton) backupButton.onclick = () => { downloadText(createBackup(activeCount), `lush-count-before-replace.json`, "application/json"); replacementReady = true; toast("Current count backup downloaded."); };
-  document.getElementById("cancelPreview").onclick = renderHome;
+  document.getElementById("cancelPreview").onclick = () => { pendingCount = null; renderHome(); };
   document.getElementById("confirmImport").onclick = async () => {
+    if (mode.value === "ood") { pendingCount.areaLabel = areas.value; openCoordinator(true, pendingCount); return; }
     if (activeCount && !replacementReady) { alert("Archive your current count or download its backup before starting the new one."); return; }
     if (activeCount && !confirm(`Start ${pendingCount.fileName} and replace the active counting screen? Archived coordinator records remain saved.`)) return;
     const next = startRegularCount(pendingCount, mode.value, areas.value);
@@ -201,14 +214,16 @@ function renderReview() {
   });
 }
 
-async function handleXlsx(file) {
+async function handleXlsx(file, picker) {
   if (!file) return;
   try {
     const bytes = await file.arrayBuffer();
+    if (!picker.isConnected) return;
     pendingCount = importInventory(bytes, file.name);
     replacementReady = Boolean(activeCount?.archivedAt) && !saveError;
     renderPreview();
   } catch (error) {
+    if (!picker.isConnected) return;
     alert(error.message);
     renderHome();
   }
@@ -231,9 +246,9 @@ async function handleBackup(file) {
 
 function bindCommon() {
   const coordinator = document.getElementById("coordinator");
-  if (coordinator) coordinator.onclick = openCoordinator;
+  if (coordinator) coordinator.onclick = () => openCoordinator();
   const xlsx = document.getElementById("xlsxUpload");
-  if (xlsx) xlsx.onchange = (event) => handleXlsx(event.target.files[0]);
+  if (xlsx) xlsx.onchange = () => handleXlsx(xlsx.files[0], xlsx);
   const backup = document.getElementById("backupUpload");
   if (backup) backup.onchange = (event) => handleBackup(event.target.files[0]);
   const install = document.getElementById("installApp");

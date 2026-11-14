@@ -1,4 +1,4 @@
-const CACHE = "lush-inventory-v2.3";
+const CACHE = "lush-inventory-v2.4";
 const APP_SHELL = [
   "./",
   "./index.html",
